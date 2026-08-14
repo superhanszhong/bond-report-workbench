@@ -25,9 +25,7 @@ interface WorkbenchEnv {
   DB: D1Database;
 }
 
-function ownerId(request: Request) {
-  return request.headers.get("oai-authenticated-user-id") || "local-preview";
-}
+const SHARED_OWNER_ID = "public-workbench";
 
 function isDate(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -95,14 +93,13 @@ export async function GET(request: Request) {
     if (!isDate(weekStart)) {
       return Response.json({ error: "weekStart 必须为 YYYY-MM-DD" }, { status: 400 });
     }
-    const owner = ownerId(request);
     const [imports, records, draft] = await Promise.all([
       db.prepare("SELECT * FROM imports WHERE owner_id = ? AND week_start = ? ORDER BY trade_date, created_at")
-        .bind(owner, weekStart).all(),
+        .bind(SHARED_OWNER_ID, weekStart).all(),
       db.prepare("SELECT * FROM bond_records WHERE owner_id = ? AND week_start = ? ORDER BY trade_date, id")
-        .bind(owner, weekStart).all(),
+        .bind(SHARED_OWNER_ID, weekStart).all(),
       db.prepare("SELECT * FROM weekly_drafts WHERE owner_id = ? AND week_start = ? LIMIT 1")
-        .bind(owner, weekStart).first(),
+        .bind(SHARED_OWNER_ID, weekStart).first(),
     ]);
     return Response.json({ imports: imports.results, records: records.results, draft });
   } catch (error) {
@@ -125,7 +122,7 @@ export async function POST(request: Request) {
       summaryText?: string;
       reviewText?: string;
     };
-    const owner = ownerId(request);
+    const owner = SHARED_OWNER_ID;
 
     if (payload.action === "saveDraft") {
       if (!isDate(payload.weekStart)) {
@@ -203,7 +200,7 @@ export async function DELETE(request: Request) {
     const url = new URL(request.url);
     const importId = url.searchParams.get("importId");
     if (!importId) return Response.json({ error: "缺少 importId" }, { status: 400 });
-    const owner = ownerId(request);
+    const owner = SHARED_OWNER_ID;
     await db.batch([
       db.prepare("DELETE FROM bond_records WHERE owner_id = ? AND import_id = ?").bind(owner, importId),
       db.prepare("DELETE FROM imports WHERE owner_id = ? AND id = ?").bind(owner, importId),
