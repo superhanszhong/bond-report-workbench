@@ -89,51 +89,133 @@ function tone(type: string) {
   return type === "国债" ? "treasury" : type === "国开债" ? "cdb" : type === "口行债" ? "exim" : "adbc";
 }
 
+function maturityInfo(tenor: string) {
+  const text = String(tenor || "").trim().toUpperCase();
+  const value = Number.parseFloat(text);
+  if (!Number.isFinite(value)) return null;
+  if (text.includes("D")) {
+    if (value <= 45) return { key: "1M", label: "1M", order: 1 / 12 };
+    if (value <= 120) return { key: "3M", label: "3M", order: 0.25 };
+    if (value <= 240) return { key: "6M", label: "6M", order: 0.5 };
+    if (value <= 300) return { key: "9M", label: "9M", order: 0.75 };
+    const years = value / 365;
+    const rounded = Math.round(years);
+    if (Math.abs(years - rounded) <= 0.08) return { key: `${rounded}Y`, label: `${rounded}Y`, order: rounded };
+    const label = `${Number(years.toFixed(2))}Y`;
+    return { key: label, label, order: years };
+  }
+  const rounded = Math.round(value);
+  const years = Math.abs(value - rounded) <= 0.08 ? rounded : Number(value.toFixed(2));
+  const label = `${years}Y`;
+  return { key: label, label, order: years };
+}
+
+function niceStep(raw: number) {
+  const safe = Math.max(raw, 0.0001);
+  const exponent = Math.floor(Math.log10(safe));
+  const fraction = safe / 10 ** exponent;
+  const nice = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return nice * 10 ** exponent;
+}
+
 function SpreadChart({ records, svgRef, startDate, endDate }: { records: ParsedBondRecord[]; svgRef: React.RefObject<SVGSVGElement | null>; startDate: string; endDate: string }) {
-  const filtered = records.filter((row) => row.spread !== null && row.spread !== undefined &&
-    ["国债", "国开债", "口行债", "农发债"].includes(row.bondType || "") &&
-    !/绿债|绿色|主题债|浮息债/.test(row.remark || ""));
-  const tenors = Array.from(new Set(filtered.map((row) => row.tenor || "—")));
-  const values = filtered.map((row) => row.spread || 0);
-  const min = Math.min(-1, ...values) - 0.8;
-  const max = Math.max(1, ...values) + 0.8;
-  const x = (tenor: string) => 110 + Math.max(0, tenors.indexOf(tenor)) * (1320 / Math.max(1, tenors.length - 1));
-  const y = (value: number) => 780 - ((value - min) / (max - min)) * 490;
-  const avg = filtered.length ? values.reduce((a, b) => a + b, 0) / filtered.length : 0;
+  const issuerTypes = ["国债", "国开债", "口行债", "农发债"];
+  const specialPattern = /绿债|绿色|主题债|浮息债/;
+  const eligible = records.filter(row => row.spread !== null && row.spread !== undefined && issuerTypes.includes(row.bondType || "") && (() => {
+    const day = new Date(`${row.tradeDate}T12:00:00`).getDay();
+    return day >= 1 && day <= 5;
+  })());
+  const excluded = eligible.filter(row => specialPattern.test(row.remark || ""));
+  const normalized = eligible.filter(row => !specialPattern.test(row.remark || "")).map((row, sourceIndex) => {
+    const maturity = maturityInfo(row.tenor || "");
+    return maturity ? { ...row, ...maturity, sourceIndex } : null;
+  }).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const maturities = [...new Map(normalized.map(row => [row.key, { key: row.key, label: row.label, order: row.order }])).values()].sort((a, b) => a.order - b.order);
+  const maturityIndex = new Map(maturities.map((item, index) => [item.key, index]));
+  const dates = Array.from(new Set(normalized.map(row => row.tradeDate))).sort();
+  const values = normalized.map(row => Number(row.spread));
+  const avg = normalized.length ? values.reduce((a, b) => a + b, 0) / normalized.length : 0;
+  const minSpread = Math.min(...values, 0);
+  const maxSpread = Math.max(...values, 0);
+  const tickStep = niceStep((maxSpread - minSpread) / 7);
+  let yMin = Math.floor((minSpread - tickStep * 0.5) / tickStep) * tickStep;
+  let yMax = Math.ceil((maxSpread + tickStep * 0.5) / tickStep) * tickStep;
+  if (yMin === yMax) { yMin -= tickStep; yMax += tickStep; }
+  const ticks: number[] = [];
+  for (let tick = yMin; tick <= yMax + tickStep / 10; tick += tickStep) ticks.push(Math.abs(tick) < tickStep / 100 ? 0 : Number(tick.toFixed(6)));
+  const chartLeft = 105;
+  const chartRight = 1615;
+  const chartTop = 195;
+  const chartBottom = 870;
+  const categoryWidth = (chartRight - chartLeft) / Math.max(1, maturities.length);
+  const xCenter = (key: string) => chartLeft + categoryWidth * ((maturityIndex.get(key) || 0) + 0.5);
+  const dateOffset = (date: string) => dates.length <= 1 ? 0 : (((dates.indexOf(date) / (dates.length - 1)) - 0.5) * categoryWidth * 0.52);
+  const varietyOffset: Record<string, number> = { 国债: -13, 国开债: -4, 口行债: 4, 农发债: 13 };
+  const y = (value: number) => chartTop + ((yMax - value) / (yMax - yMin)) * (chartBottom - chartTop);
+  const colors: Record<string, string> = { treasury: "#F4D8D3", cdb: "#F7E3CF", exim: "#E6E7E5", adbc: "#D8EEF5" };
+  const darkColors: Record<string, string> = { treasury: "#C18476", cdb: "#C99A76", exim: "#A6A6A2", adbc: "#8CBCC7" };
+  const points = normalized.map(row => ({ ...row, cx: xCenter(row.key) + dateOffset(row.tradeDate) + (varietyOffset[row.bondType || ""] || 0), cy: y(Number(row.spread)) }));
+  type Box = { x: number; y: number; w: number; h: number };
+  const placed: Box[] = [];
+  const overlaps = (a: Box, b: Box) => a.x < b.x + b.w + 6 && a.x + a.w + 6 > b.x && a.y < b.y + b.h + 6 && a.y + a.h + 6 > b.y;
+  const callouts = [...points.filter(row => Number(row.spread) > 0).sort((a, b) => Number(b.spread) - Number(a.spread)), ...points.filter(row => Number(row.spread) <= -1).sort((a, b) => Number(a.spread) - Number(b.spread))].map((row, labelIndex) => {
+    const label = `${row.shortName || row.bondCode || ""}  ${Number(row.spread) > 0 ? "+" : ""}${Number(row.spread).toFixed(2)}bp`;
+    const w = Math.max(112, label.length * 9.5 + 20);
+    const h = 30;
+    const candidates: { x: number; y: number }[] = [];
+    const sideFirst = (row.sourceIndex + labelIndex) % 2 === 0;
+    for (let lane = 0; lane < 8; lane += 1) {
+      const vertical = 14 + lane * 34;
+      const xs = sideFirst ? [row.cx + 16, row.cx - w - 16] : [row.cx - w - 16, row.cx + 16];
+      xs.forEach(x => candidates.push({ x, y: row.cy - h - vertical }));
+      [...xs].reverse().forEach(x => candidates.push({ x, y: row.cy + vertical }));
+    }
+    let best: Box | undefined;
+    let bestScore = Number.POSITIVE_INFINITY;
+    candidates.forEach(candidate => {
+      const trial = { x: Math.min(Math.max(candidate.x, chartLeft + 8), chartRight - w - 8), y: Math.min(Math.max(candidate.y, chartTop + 8), chartBottom - h - 8), w, h };
+      const score = placed.filter(box => overlaps(trial, box)).length * 10000 + Math.abs(trial.x + w / 2 - row.cx) + Math.abs(trial.y + h / 2 - row.cy);
+      if (score < bestScore) { best = trial; bestScore = score; }
+    });
+    const box = best || { x: row.cx + 16, y: row.cy - h - 14, w, h };
+    placed.push(box);
+    return { row, label, box };
+  });
   return (
     <div className="chart-wrap">
       <svg ref={svgRef} className="spread-chart" viewBox="0 0 1680 1050" role="img" aria-label="本周国债、政金债发行一二级利差散点图">
         <rect width="1680" height="1050" fill="#fff" />
-        <rect width="1680" height="126" fill="#F7E3CF" />
-        <text x="78" y="72" fontSize="38" fontWeight="700" fill="#9B642F">本周国债、政金债发行一二级利差散点图</text>
-        <text x="80" y="166" fontSize="21" fill="#6b7280">分析区间：{startDate} 至 {endDate}｜利差口径：综收－二级（bp）｜散点口径：单券</text>
-        <text x="80" y="220" fontSize="23" fill="#68717b">普通债券样本 <tspan fontWeight="700" fill="#9B642F">{filtered.length}只</tspan> ｜ 正利差债券 <tspan fontWeight="700" fill="#9B642F">{filtered.filter(r => (r.spread || 0) > 0).length}只</tspan> ｜ 平均利差 <tspan fontWeight="700" fill="#9B642F">{avg.toFixed(2)}bp</tspan></text>
-        <rect x="80" y={y(max)} width="1500" height={y(0) - y(max)} fill="#FFFCFA" />
-        {[min, min + (max-min)/4, min + (max-min)/2, min + 3*(max-min)/4, max].map((tick) => (
+        <rect width="1680" height="96" fill="#F7E3CF" />
+        <text x="70" y="43" fontSize="34" fontWeight="700" fill="#9B642F">国债、政金债发行一二级利差散点图</text>
+        <text x="70" y="76" fontSize="20" fill="#6B6662">交易日：{startDate} 至 {endDate}｜利差口径：综收－二级（bp）｜散点口径：单券</text>
+        <text x="70" y="140" fontSize="22" fill="#68717b">普通债券样本 <tspan fontSize="26" fontWeight="700" fill="#D28A4D">{normalized.length}只</tspan>　｜　正利差债券 <tspan fontSize="26" fontWeight="700" fill="#D28A4D">{normalized.filter(r => Number(r.spread) > 0).length}只</tspan>　｜　平均利差 <tspan fontSize="26" fontWeight="700" fill="#D28A4D">{avg.toFixed(2)}bp</tspan>　｜　已排除{excluded.some(row => /绿债|绿色/.test(row.remark || "")) ? "绿债、" : ""}浮息债和主题债 <tspan fontSize="26" fontWeight="700" fill="#D28A4D">{excluded.length}只</tspan></text>
+        <rect x={chartLeft} y={chartTop} width={chartRight-chartLeft} height={Math.max(0, y(0)-chartTop)} fill="#FFFCFA" />
+        {ticks.map((tick) => (
           <g key={tick}>
-            <line x1="80" y1={y(tick)} x2="1580" y2={y(tick)} stroke="#e5e7eb" />
-            <text x="62" y={y(tick)+7} textAnchor="end" fontSize="20" fill="#747b84">{tick.toFixed(1)}</text>
+            <line x1={chartLeft} y1={y(tick)} x2={chartRight} y2={y(tick)} stroke={tick === 0 ? "#D8B864" : "#E7E6E6"} strokeWidth={tick === 0 ? 2.3 : 1} strokeDasharray={tick === 0 ? "9 6" : undefined} />
+            <text x={chartLeft-15} y={y(tick)+7} textAnchor="end" fontSize="20" fontWeight="600" fill="#7F7F7F">{tick > 0 ? "+" : ""}{Number(tick.toFixed(2))}</text>
           </g>
         ))}
-        <line x1="80" y1={y(0)} x2="1580" y2={y(0)} stroke="#D8B864" strokeWidth="3" strokeDasharray="10 8" />
-        <line x1="80" y1={y(avg)} x2="1580" y2={y(avg)} stroke="#8b9299" strokeWidth="2" strokeDasharray="8 8" />
-        {tenors.map((tenor) => <text key={tenor} x={x(tenor)} y="848" textAnchor="middle" fontSize="22" fontWeight="600" fill="#626a73">{tenor}</text>)}
-        {filtered.map((row, index) => {
-          const jitter = ((index % 5) - 2) * 13;
-          const cy = y(row.spread || 0);
-          const cx = x(row.tenor || "—") + jitter;
-          const colors: Record<string, string> = { treasury: "#F4D8D3", cdb: "#F7E3CF", exim: "#E6E7E5", adbc: "#D8EEF5" };
-          const notable = (row.spread || 0) > 0 || (row.spread || 0) <= -1;
+        <line x1={chartLeft} y1={y(avg)} x2={chartRight} y2={y(avg)} stroke="#7F7F7F" strokeWidth="1.5" strokeDasharray="5 5" />
+        <text x={chartRight-8} y={y(avg)-8} textAnchor="end" fontSize="17" fill="#7F7F7F">区间均值 {avg.toFixed(2)}bp</text>
+        {maturities.map((item, index) => <g key={item.key}><line x1={chartLeft+index*categoryWidth} y1={chartTop} x2={chartLeft+index*categoryWidth} y2={chartBottom} stroke="#F2F2F2"/><text x={xCenter(item.key)} y="906" textAnchor="middle" fontSize="20" fontWeight="600" fill="#7F7F7F">{item.label}</text></g>)}
+        <line x1={chartRight} y1={chartTop} x2={chartRight} y2={chartBottom} stroke="#F2F2F2"/>
+        {points.map((row, index) => {
+          const notable = Number(row.spread) > 0 || Number(row.spread) <= -1;
           return <g key={`${row.bondCode}-${index}`}>
-            <circle cx={cx} cy={cy} r={notable ? 13 : 9} fill={colors[tone(row.bondType || "")]} stroke="#B8945D" strokeWidth={notable ? 3 : 1} />
-            {notable && <text x={cx + 17} y={cy - 12} fontSize="17" fontWeight="600" fill="#42464d">{row.shortName || row.bondCode} {(row.spread || 0).toFixed(2)}</text>}
+            <circle cx={row.cx} cy={row.cy} r={notable ? 9 : 6.5} fill={colors[tone(row.bondType || "")]} fillOpacity={notable ? 1 : .76} stroke={notable ? darkColors[tone(row.bondType || "")] : "#FFFFFF"} strokeWidth={notable ? 2.8 : 1.2} />
           </g>;
         })}
-        <text x="830" y="920" textAnchor="middle" fontSize="23" fontWeight="600" fill="#626a73">发行期限</text>
-        <text x="25" y="540" transform="rotate(-90 25 540)" textAnchor="middle" fontSize="22" fontWeight="600" fill="#626a73">综收－二级（bp）</text>
-        {[["国债","#F4D8D3"],["国开债","#F7E3CF"],["口行债","#E6E7E5"],["农发债","#D8EEF5"]].map(([label,color],i) => <g key={label} transform={`translate(${485+i*190},995)`}><circle r="11" fill={color}/><text x="22" y="7" fontSize="22" fontWeight="600" fill="#555b63">{label}</text></g>)}
+        {callouts.map(({ row, label, box }, index) => <g key={`callout-${row.bondCode}-${index}`}>
+          <line x1={row.cx} y1={row.cy} x2={box.x+box.w/2} y2={box.y+box.h/2} stroke={darkColors[tone(row.bondType || "")]} strokeWidth="1.2" opacity=".75"/>
+          <rect x={box.x} y={box.y} width={box.w} height={box.h} rx="7" fill={colors[tone(row.bondType || "")]} fillOpacity=".92" stroke={darkColors[tone(row.bondType || "")]} strokeWidth="1"/>
+          <text x={box.x+box.w/2} y={box.y+20} textAnchor="middle" fontSize="18" fontWeight="700" fill="#3F3F3F">{label}</text>
+        </g>)}
+        <text x="860" y="950" textAnchor="middle" fontSize="21" fontWeight="600" fill="#626a73">发行期限</text>
+        <text x="25" y="535" transform="rotate(-90 25 535)" textAnchor="middle" fontSize="21" fontWeight="600" fill="#626a73">综收－二级（bp）</text>
+        {[["国债","#F4D8D3"],["国开债","#F7E3CF"],["口行债","#E6E7E5"],["农发债","#D8EEF5"]].map(([label,color],i) => <g key={label} transform={`translate(${485+i*190},1005)`}><circle r="11" fill={color}/><text x="22" y="7" fontSize="24" fontWeight="700" fill="#555b63">{label}</text></g>)}
       </svg>
-      {!filtered.length && <div className="chart-empty">上传一二级表后，这里自动生成本周利差图</div>}
+      {!normalized.length && <div className="chart-empty">上传一二级表后，这里按所选区间生成利差图</div>}
     </div>
   );
 }
