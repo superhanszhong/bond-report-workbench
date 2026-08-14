@@ -92,9 +92,35 @@ export function fridayOf(weekStart: string) {
   return isoDate(date);
 }
 
+function actualSheetRange(sheet: XLSX.WorkSheet) {
+  let minRow = Number.POSITIVE_INFINITY;
+  let minCol = Number.POSITIVE_INFINITY;
+  let maxRow = -1;
+  let maxCol = -1;
+
+  Object.keys(sheet).forEach((address) => {
+    if (address.startsWith("!")) return;
+    const cell = sheet[address] as XLSX.CellObject | undefined;
+    if (!cell || ((cell.v === undefined || cell.v === null || cell.v === "") && !cell.f)) return;
+    const { r, c } = XLSX.utils.decode_cell(address);
+    minRow = Math.min(minRow, r);
+    minCol = Math.min(minCol, c);
+    maxRow = Math.max(maxRow, r);
+    maxCol = Math.max(maxCol, c);
+  });
+
+  if (maxRow < 0 || maxCol < 0) return undefined;
+  return { s: { r: minRow, c: minCol }, e: { r: maxRow, c: maxCol } };
+}
+
+function boundedSheetRows(sheet: XLSX.WorkSheet) {
+  const range = actualSheetRange(sheet);
+  if (!range) return [];
+  return XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: null, range });
+}
+
 function sheetRows(workbook: XLSX.WorkBook) {
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  return XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: null });
+  return boundedSheetRows(workbook.Sheets[workbook.SheetNames[0]]);
 }
 
 function headerIndex(rows: unknown[][], aliases: Record<string, string[]>) {
@@ -207,7 +233,7 @@ export async function parseSpreadFile(file: File) {
   };
   const records: ParsedBondRecord[] = [];
   workbook.SheetNames.forEach((sheetName) => {
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, raw: true, defval: null });
+    const rows = boundedSheetRows(workbook.Sheets[sheetName]);
     const { row: headerRow, index } = headerIndex(rows, aliases);
     if (headerRow < 0 || index.发行日期 === undefined || index.代码 === undefined || index.利差 === undefined) return;
     for (let r = headerRow + 1; r < rows.length; r += 1) {
