@@ -18,7 +18,31 @@ export type ParsedBondRecord = {
   fee?: number | null;
   distributionDate?: string;
   remark?: string;
+  summaryMeta?: SpreadSummaryMeta;
   raw?: Record<string, unknown>;
+};
+
+export type SpreadSummaryMeta = {
+  baseCode: string;
+  route: string;
+  rateType: string;
+  displaySpreadText: string;
+  auctionSpreadText: string;
+  allInText: string;
+  secondaryText: string;
+  winningRateText: string;
+  note: string;
+  proceeds: string;
+  previous?: {
+    date: string;
+    code: string;
+    displaySpreadText: string;
+    auctionSpreadText: string;
+    allInText: string;
+    secondaryText: string;
+    note: string;
+    spread: number | null;
+  };
 };
 
 const LOCAL_ALIASES: Record<string, string[]> = {
@@ -57,6 +81,16 @@ function numberValue(value: unknown): number | null {
   if (!normalized) return null;
   const n = Number(normalized);
   return Number.isFinite(n) ? n : null;
+}
+
+function basisPointValue(value: unknown): number | null {
+  const direct = numberValue(value);
+  if (direct !== null) return direct;
+  const text = clean(value);
+  if (!text || /净价/.test(text)) return null;
+  if (/平/.test(text) && !/^-?\d/.test(text)) return 0;
+  const match = text.match(/^(-?\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : null;
 }
 
 function excelDate(value: unknown): Date | null {
@@ -131,7 +165,7 @@ function headerIndex(rows: unknown[][], aliases: Record<string, string[]>) {
     const cells = new Map<string, number>();
     (row || []).forEach((value, col) => {
       const label = clean(value).replace(/\s+/g, "");
-      if (label) cells.set(label, col);
+      if (label && !cells.has(label)) cells.set(label, col);
     });
     const index: Record<string, number> = {};
     Object.entries(aliases).forEach(([key, options]) => {
@@ -176,10 +210,21 @@ function cleanBondType(fullName: string, fallback: string, region: string) {
   return text || fallback || "地方债";
 }
 
-function routeFromRemark(remark: string) {
+function routeFromRemark(remark: string, bondCode = "") {
   if (/报价发行|前台报价/.test(remark)) return "报价发行";
   if (/清发|上清所/.test(remark)) return "上清所";
+  if (/^09/.test(bondCode)) return "上清所";
   return "中债招标";
+}
+
+function baseBondCode(code: string) {
+  return code.replace(/[XZ]\d*$/i, "");
+}
+
+function rateTypeFromRemark(remark: string) {
+  if (/DR/i.test(remark)) return "DR浮息债";
+  if (/LPR/i.test(remark)) return "LPR浮息债";
+  return "固息或贴现";
 }
 
 export async function parseLocalBondFile(file: File) {
@@ -228,27 +273,64 @@ export async function parseSpreadFile(file: File) {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
   const aliases = {
     发行日期: ["发行日期", "招标日"], 代码: ["代码", "债券代码"], 简称: ["简称", "债券简称"],
-    期限: ["期限"], 发行人: ["发行人"], 备注: ["备注"], 利差: ["综收-二级", "综收－二级"],
-    发行量: ["发行量", "发行量(亿元)"],
+    期限: ["期限"], 发行人: ["发行人"], 备注: ["备注"],
+    利差: ["综收比二级(bp)", "综收比二级（bp）", "综收-二级", "综收－二级"],
+    发行量: ["发行量", "发行量(亿元)"], 中标利率: ["中标利率"], 综收: ["综收"],
+    招标利差: ["中标比二级(bp)", "中标比二级（bp）"], 二级: ["截标前二级价格"],
+    前一日估值: ["前一日估值"],
+    募集用途: ["募集用途"], 全场倍数: ["全场倍数"], 边际倍数: ["边际倍数"],
+    边际投标量: ["首场边际投标量（亿）", "边际投标量（亿）"],
+    边际中标量: ["首场边际中标量（亿）", "边际中标量（亿）"],
   };
-  const records: ParsedBondRecord[] = [];
+  const candidates: Array<ParsedBondRecord & { order: number }> = [];
+  let order = 0;
   workbook.SheetNames.forEach((sheetName) => {
-    const rows = boundedSheetRows(workbook.Sheets[sheetName]);
+    const sheet = workbook.Sheets[sheetName];
+    const range = actualSheetRange(sheet);
+    if (!range) return;
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: null, range });
+    const displayRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: "", range });
     const { row: headerRow, index } = headerIndex(rows, aliases);
     if (headerRow < 0 || index.发行日期 === undefined || index.代码 === undefined || index.利差 === undefined) return;
     for (let r = headerRow + 1; r < rows.length; r += 1) {
       const raw = rowObject(rows[r], index);
+      const display = rowObject(displayRows[r] || [], index);
       const date = excelDate(raw.发行日期);
       const bondCode = clean(raw.代码).replace(/\.IB$/i, "");
       if (!date || !bondCode) continue;
       const issuer = clean(raw.发行人);
       const remark = clean(raw.备注);
-      records.push({
+      const route = routeFromRemark(remark, bondCode);
+      const meta: SpreadSummaryMeta = {
+        baseCode: baseBondCode(bondCode), route, rateType: rateTypeFromRemark(remark),
+        displaySpreadText: clean(display.利差), auctionSpreadText: clean(display.招标利差),
+        allInText: clean(display.综收), secondaryText: clean(display.二级),
+        winningRateText: clean(display.中标利率), note: remark, proceeds: clean(display.募集用途),
+      };
+      const fullRaw = { ...raw, __display: display, __summaryMeta: meta };
+      candidates.push({
         tradeDate: isoDate(date), bondCode, shortName: clean(raw.简称), issuer,
-        bondType: ISSUER_MAP[issuer] || issuer, issuanceRoute: routeFromRemark(remark),
-        tenor: clean(raw.期限), amount: numberValue(raw.发行量), spread: numberValue(raw.利差), remark, raw,
+        bondType: ISSUER_MAP[issuer] || issuer, issuanceRoute: route,
+        tenor: clean(raw.期限), amount: numberValue(raw.发行量), spread: basisPointValue(raw.利差),
+        remark, summaryMeta: meta, raw: fullRaw, order: order++,
       });
     }
+  });
+  candidates.sort((a, b) => `${a.tradeDate}|${String(a.order).padStart(8, "0")}`.localeCompare(`${b.tradeDate}|${String(b.order).padStart(8, "0")}`));
+  const history = new Map<string, ParsedBondRecord>();
+  const records: ParsedBondRecord[] = candidates.map(({ order: _order, ...record }) => {
+    const meta = record.summaryMeta!;
+    const previous = history.get(meta.baseCode);
+    if (previous?.summaryMeta) {
+      meta.previous = {
+        date: previous.tradeDate, code: previous.bondCode || "", displaySpreadText: previous.summaryMeta.displaySpreadText,
+        auctionSpreadText: previous.summaryMeta.auctionSpreadText, allInText: previous.summaryMeta.allInText,
+        secondaryText: previous.summaryMeta.secondaryText, note: previous.remark || "", spread: previous.spread ?? null,
+      };
+    }
+    record.raw = { ...(record.raw || {}), __summaryMeta: meta };
+    history.set(meta.baseCode, record);
+    return record;
   });
   if (!records.length) throw new Error("未识别到一二级利差明细，请检查表头");
   return records;
@@ -277,32 +359,86 @@ export function localPlanText(records: ParsedBondRecord[], date: string) {
 }
 
 export function spreadSummary(records: ParsedBondRecord[]) {
-  const ordinary = records.filter((row) => row.spread !== null && row.spread !== undefined &&
-    ["国债", "国开债", "口行债", "农发债"].includes(row.bondType || "") &&
-    !/绿债|绿色|主题债|浮息债/.test(row.remark || ""));
-  if (!ordinary.length) return "本周暂无符合口径的国债及政金债发行利差记录。";
-  const describe = (rows: ParsedBondRecord[]) => {
-    const positive = rows.filter((row) => Number(row.spread) > 0).length;
-    const negative = rows.filter((row) => Number(row.spread) < 0).length;
-    const avg = rows.reduce((sum, row) => sum + Number(row.spread || 0), 0) / rows.length;
-    const direction = positive && negative ? "正负利差并存" : positive ? "整体高于二级" : negative ? "整体低于二级" : "整体与二级基本持平";
-    const details = rows.map((row) => {
-      const value = Number(row.spread || 0);
-      const comparison = value > 0 ? `高二级${value.toFixed(2)}BP` : value < 0 ? `低二级${Math.abs(value).toFixed(2)}BP` : "与二级持平";
-      return `${row.bondType || ""}${row.tenor || ""}${row.shortName ? `（${row.shortName}）` : ""}${comparison}`;
-    }).join("，");
-    return `${direction}，平均利差${avg.toFixed(2)}BP。${details}。`;
+  const supported = records.filter((row) => ["国债", "国开债", "口行债", "农发债"].includes(row.bondType || ""));
+  if (!supported.length) return "本周暂无符合口径的国债及政金债发行记录。";
+
+  const tenor = (value = "") => /[DMY]$/i.test(value) ? value.toUpperCase() : `${value}Y`;
+  const benchmark = (text: string) => text.includes("远期") ? "远期" : text.includes("估值") ? "估值" : "二级";
+  const reference = (text: string) => {
+    const match = text.match(/(?:较|平)([^()]*?)(估值|二级|远期)/);
+    return match?.[1]?.trim() || "";
   };
-  const paragraphs: string[] = [];
-  const treasury = ordinary.filter((row) => row.bondType === "国债");
-  if (treasury.length) paragraphs.push(`国债：${describe(treasury)}`);
-  const policy = ordinary.filter((row) => row.bondType !== "国债");
-  if (policy.length) {
-    const routeParagraphs = ["中债招标", "上清所", "报价发行"].map((route) => {
-      const routeRows = policy.filter((row) => (row.issuanceRoute || "中债招标") === route);
-      return routeRows.length ? `${route}：${describe(routeRows)}` : "";
-    }).filter(Boolean);
-    paragraphs.push(`政金债：\n${routeParagraphs.join("\n")}`);
+  const resultPhrase = (row: ParsedBondRecord, text?: string, value?: number | null) => {
+    const source = text || row.summaryMeta?.displaySpreadText || "";
+    const numeric = value ?? row.spread;
+    const target = `${reference(source)}${benchmark(source)}`;
+    if (/持平|平/.test(source) && (numeric === null || numeric === undefined || numeric === 0)) return `与${target}持平`;
+    if (numeric === null || numeric === undefined || !Number.isFinite(numeric)) return source || "暂无可比利差";
+    if (numeric > 0) return `高${target}${numeric.toFixed(2)}BP`;
+    if (numeric < 0) return `低${target}${Math.abs(numeric).toFixed(2)}BP`;
+    return `与${target}持平`;
+  };
+  const direction = (previous: number, current: number) => {
+    if (previous < 0 && current < 0) return current < previous ? "负利差走扩" : "负利差收窄";
+    if (previous > 0 && current > 0) return current > previous ? "正利差走扩" : "正利差收窄";
+    if (previous >= 0 && current < 0) return "由正转负";
+    if (previous <= 0 && current > 0) return "由负转正";
+    return current === 0 ? "收窄至持平" : "由持平转为利差";
+  };
+  const sections: string[] = [];
+  const maturityOrder = (value = "") => {
+    const numeric = Number.parseFloat(value);
+    if (!Number.isFinite(numeric)) return 999;
+    if (/D$/i.test(value)) return numeric / 365;
+    if (/M$/i.test(value)) return numeric / 12;
+    return numeric;
+  };
+  const treasury = supported.filter((row) => row.bondType === "国债").sort((a, b) =>
+    a.tradeDate.localeCompare(b.tradeDate) || maturityOrder(a.tenor) - maturityOrder(b.tenor));
+  if (treasury.length) {
+    const negatives = treasury.filter((row) => Number(row.spread) < 0).length;
+    const zeros = treasury.filter((row) => row.spread === 0 || /平/.test(row.summaryMeta?.displaySpreadText || "")).length;
+    const positives = treasury.length - negatives - zeros;
+    const patterns = [negatives ? "低于二级" : "", zeros ? "与二级持平" : "", positives ? "小幅高于二级或远期" : ""].filter(Boolean);
+    const opening = `本周国债发行结果${patterns.join("、")}，各期限品种差异化表现。`;
+    const details = treasury.map((row) => `${tenor(row.tenor)}国债本次${resultPhrase(row)}`).join("；") + "。";
+    sections.push(`国债\n${opening}\n${details}`);
   }
-  return paragraphs.join("\n\n");
+
+  const policy = supported.filter((row) => row.bondType !== "国债" && !/DR浮息债/i.test(row.summaryMeta?.rateType || row.remark || ""));
+  const routeSections = ["中债招标", "上清所", "报价发行"].map((route) => {
+    const material = policy.filter((row) => (row.summaryMeta?.route || row.issuanceRoute || "中债招标") === route).map((row) => {
+      const previous = row.summaryMeta?.previous;
+      const previousSpread = previous?.spread;
+      const currentSpread = row.spread;
+      if (previousSpread === null || previousSpread === undefined || currentSpread === null || currentSpread === undefined) return null;
+      const change = currentSpread - previousSpread;
+      if (Math.abs(change) <= 1) return null;
+      return { row, previous, previousSpread, currentSpread, change, movement: direction(previousSpread, currentSpread) };
+    }).filter((item): item is NonNullable<typeof item> => Boolean(item));
+    if (!material.length) return "";
+    const lead = material.map(({ row, movement }) => `${row.bondType}${tenor(row.tenor)}品种${movement}`).join("，") + "。";
+    const details = material.map(({ row, previous, previousSpread, currentSpread, change, movement }) =>
+      `${row.bondType}${tenor(row.tenor)}品种本次${resultPhrase(row, row.summaryMeta?.displaySpreadText, currentSpread)}，上次${resultPhrase(row, previous.displaySpreadText, previousSpread)}，${movement}${Math.abs(change).toFixed(2)}BP。`
+    ).join("\n");
+    return `${route}\n${lead}\n${details}`;
+  }).filter(Boolean);
+  if (routeSections.length) sections.push(`政金债\n${routeSections.join("\n\n")}`);
+
+  const dr = supported.filter((row) => /DR浮息债/i.test(row.summaryMeta?.rateType || row.remark || ""));
+  if (dr.length) {
+    const details = dr.map((row) => {
+      const meta = row.summaryMeta;
+      const label = `${row.bondType}${tenor(row.tenor)}DR浮息债`;
+      const text = meta?.displaySpreadText || "";
+      const route = meta?.route || row.issuanceRoute || "中债招标";
+      const routePhrase = route === "报价发行" ? "报价方式" : route;
+      const net = text.match(/(?:低|高)(?:估值|估价)净价\([^)]*\)([\d.]+)元/);
+      if (net) return `${label}通过${routePhrase}发行，缴款净价${text.startsWith("低") ? "低于" : "高于"}估值净价${Number(net[1]).toFixed(4)}元。`;
+      if (/平(?:估值|估价)净价/.test(text)) return `${label}通过${routePhrase}发行，缴款净价与估值净价持平。`;
+      return `${label}通过${routePhrase}发行；表内未提供可比缴款净价，本次不作净价差比较。`;
+    });
+    sections.push(`DR浮息债\n${details.join("\n")}`);
+  }
+  return sections.join("\n\n");
 }

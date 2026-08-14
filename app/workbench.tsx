@@ -9,6 +9,7 @@ import {
   fridayOf, localPlanText, mondayOf, parseLocalBondFile, parseSpreadFile,
   ParsedBondRecord, spreadSummary,
 } from "./lib/workbench";
+import { buildWeeklyReportBlob } from "./lib/report";
 
 type StoredRecord = ParsedBondRecord & {
   id: number;
@@ -23,6 +24,7 @@ type StoredRecord = ParsedBondRecord & {
   bid_time?: string;
   floor_rate?: number | null;
   distribution_date?: string;
+  raw_json?: string;
 };
 
 type ImportRow = {
@@ -37,7 +39,7 @@ type ImportRow = {
 type WeekData = {
   imports: ImportRow[];
   records: StoredRecord[];
-  draft?: { summary_text?: string; review_text?: string } | null;
+  draft?: { summary_text?: string; review_text?: string; updated_at?: string } | null;
 };
 
 type LatestDates = { local_bond?: string; spread?: string };
@@ -66,6 +68,14 @@ function shiftWeek(start: string, offset: number) {
 }
 
 function normalize(row: StoredRecord): ParsedBondRecord {
+  let raw: Record<string, unknown> = row.raw || {};
+  if (row.raw_json) {
+    try { raw = JSON.parse(row.raw_json) as Record<string, unknown>; } catch { raw = {}; }
+  }
+  const storedMeta = raw.__summaryMeta && typeof raw.__summaryMeta === "object"
+    ? raw.__summaryMeta as ParsedBondRecord["summaryMeta"] : undefined;
+  const fallbackRoute = row.remark && /报价发行|前台报价/.test(row.remark)
+    ? "报价发行" : /^09/.test(row.bond_code || row.bondCode || "") ? "上清所" : (row.issuance_route || row.issuanceRoute);
   return {
     tradeDate: row.trade_date || row.tradeDate,
     bondCode: row.bond_code || row.bondCode,
@@ -74,7 +84,7 @@ function normalize(row: StoredRecord): ParsedBondRecord {
     issuer: row.issuer,
     region: row.region,
     bondType: row.bond_type || row.bondType,
-    issuanceRoute: row.issuance_route || row.issuanceRoute,
+    issuanceRoute: storedMeta?.route || fallbackRoute,
     venue: row.venue,
     bidTime: row.bid_time || row.bidTime,
     tenor: row.tenor,
@@ -84,6 +94,8 @@ function normalize(row: StoredRecord): ParsedBondRecord {
     fee: row.fee,
     distributionDate: row.distribution_date || row.distributionDate,
     remark: row.remark,
+    summaryMeta: storedMeta,
+    raw,
   };
 }
 
@@ -267,7 +279,10 @@ export default function Workbench() {
       setLatestDates(latestPayload.latestDates || {});
       const loadedSpread = payload.records.filter(r => r.dataset_type === "spread").map(normalize);
       const generated = spreadSummary(loadedSpread);
-      setSummary(payload.draft?.summary_text || generated);
+      const latestSpreadImport = payload.imports.filter(item => item.dataset_type === "spread")
+        .map(item => item.created_at).sort().at(-1) || "";
+      const draftIsCurrent = Boolean(payload.draft?.summary_text && payload.draft?.updated_at && payload.draft.updated_at >= latestSpreadImport);
+      setSummary(draftIsCurrent ? payload.draft?.summary_text || generated : generated);
       setAnalysisStart(weekStart);
       setAnalysisEnd(fridayOf(weekStart));
       setChartRange({ start: weekStart, end: fridayOf(weekStart) });
@@ -388,25 +403,8 @@ export default function Workbench() {
   }
 
   async function exportDocx() {
-    const { Document, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType, AlignmentType, HeadingLevel } = await import("docx");
     const mmdd = (d: string) => d.slice(5).replace("-", "");
-    const children: (InstanceType<typeof Paragraph> | InstanceType<typeof Table>)[] = [
-      new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `利率债发行周报${mmdd(weekStart)}-${mmdd(weekEnd)}`, bold: true, size: 36, color: "000000" })] }),
-      new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text: "周报发行小结", bold: true, color: "000000" })] }),
-      ...summary.split(/\n+/).filter(Boolean).map((text) => new Paragraph({ children: [new TextRun({ text, size: 21, color: "000000" })], spacing: { after: 120, line: 300 } })),
-      new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text: "本周地方债发行明细", bold: true, color: "000000" })] }),
-      new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
-        new TableRow({ tableHeader: true, children: ["日期","代码","简称","期限","发行量（亿元）","下限","场所"].map(t => new TableCell({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children:[new TextRun({text:t,bold:true,color:"000000"})] })] })) }),
-        ...localRecords.map((row) => new TableRow({ cantSplit: true, children: [row.tradeDate,row.bondCode||"",row.shortName||"",row.tenor||"",String(row.amount??""),String(row.floorRate??""),row.venue||""].map(t => new TableCell({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children:[new TextRun({text:t,color:"000000"})] })] })) })),
-      ] }),
-      new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text: "本周发行回顾", bold: true, color: "000000" })] }),
-      ...dailyDates.flatMap((date) => [
-        new Paragraph({ keepNext: true, children: [new TextRun({ text: `${formatMd(date)} 发行回顾`, bold: true, color: "000000" })] }),
-        ...localPlanText(localRecords, date).split("\n").map(text => new Paragraph({ keepNext: true, children:[new TextRun({text,color:"000000"})] })),
-      ]),
-    ];
-    const doc = new Document({ sections: [{ properties: {}, children }] });
-    const blob = await Packer.toBlob(doc);
+    const blob = await buildWeeklyReportBlob({ weekStart, summary, localRecords, spreadRecords });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
     a.download = `利率债发行周报${mmdd(weekStart)}-${mmdd(weekEnd)}.docx`; a.click(); URL.revokeObjectURL(a.href);
   }
