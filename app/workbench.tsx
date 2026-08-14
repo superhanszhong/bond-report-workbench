@@ -89,7 +89,7 @@ function tone(type: string) {
   return type === "国债" ? "treasury" : type === "国开债" ? "cdb" : type === "口行债" ? "exim" : "adbc";
 }
 
-function SpreadChart({ records, svgRef }: { records: ParsedBondRecord[]; svgRef: React.RefObject<SVGSVGElement | null> }) {
+function SpreadChart({ records, svgRef, startDate, endDate }: { records: ParsedBondRecord[]; svgRef: React.RefObject<SVGSVGElement | null>; startDate: string; endDate: string }) {
   const filtered = records.filter((row) => row.spread !== null && row.spread !== undefined &&
     ["国债", "国开债", "口行债", "农发债"].includes(row.bondType || "") &&
     !/绿债|绿色|主题债|浮息债/.test(row.remark || ""));
@@ -106,7 +106,7 @@ function SpreadChart({ records, svgRef }: { records: ParsedBondRecord[]; svgRef:
         <rect width="1680" height="1050" fill="#fff" />
         <rect width="1680" height="126" fill="#F7E3CF" />
         <text x="78" y="72" fontSize="38" fontWeight="700" fill="#9B642F">本周国债、政金债发行一二级利差散点图</text>
-        <text x="80" y="166" fontSize="21" fill="#6b7280">利差口径：综收－二级（bp）｜散点口径：单券</text>
+        <text x="80" y="166" fontSize="21" fill="#6b7280">分析区间：{startDate} 至 {endDate}｜利差口径：综收－二级（bp）｜散点口径：单券</text>
         <text x="80" y="220" fontSize="23" fill="#68717b">普通债券样本 <tspan fontWeight="700" fill="#9B642F">{filtered.length}只</tspan> ｜ 正利差债券 <tspan fontWeight="700" fill="#9B642F">{filtered.filter(r => (r.spread || 0) > 0).length}只</tspan> ｜ 平均利差 <tspan fontWeight="700" fill="#9B642F">{avg.toFixed(2)}bp</tspan></text>
         <rect x="80" y={y(max)} width="1500" height={y(0) - y(max)} fill="#FFFCFA" />
         {[min, min + (max-min)/4, min + (max-min)/2, min + 3*(max-min)/4, max].map((tick) => (
@@ -147,6 +147,12 @@ export default function Workbench() {
   const [summary, setSummary] = useState("");
   const [saving, setSaving] = useState(false);
   const [dragging, setDragging] = useState<"local_bond" | "spread" | null>(null);
+  const [analysisStart, setAnalysisStart] = useState(() => mondayOf(new Date()));
+  const [analysisEnd, setAnalysisEnd] = useState(() => fridayOf(mondayOf(new Date())));
+  const [chartRange, setChartRange] = useState(() => ({ start: mondayOf(new Date()), end: fridayOf(mondayOf(new Date())) }));
+  const [chartRecords, setChartRecords] = useState<ParsedBondRecord[]>([]);
+  const [spreadSourceRecords, setSpreadSourceRecords] = useState<ParsedBondRecord[]>([]);
+  const [chartLoading, setChartLoading] = useState(false);
   const localInput = useRef<HTMLInputElement>(null);
   const spreadInput = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -166,8 +172,13 @@ export default function Workbench() {
       const payload = await response.json() as WeekData & { error?: string };
       if (!response.ok) throw new Error(payload.error || "读取失败");
       setData(payload);
-      const generated = spreadSummary(payload.records.filter(r => r.dataset_type === "spread").map(normalize));
+      const loadedSpread = payload.records.filter(r => r.dataset_type === "spread").map(normalize);
+      const generated = spreadSummary(loadedSpread);
       setSummary(payload.draft?.summary_text || generated);
+      setAnalysisStart(weekStart);
+      setAnalysisEnd(fridayOf(weekStart));
+      setChartRange({ start: weekStart, end: fridayOf(weekStart) });
+      setChartRecords(loadedSpread);
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "读取失败");
@@ -180,6 +191,7 @@ export default function Workbench() {
     setMessage(`正在解析 ${file.name}…`);
     try {
       const parsed = type === "local_bond" ? await parseLocalBondFile(file) : await parseSpreadFile(file);
+      if (type === "spread") setSpreadSourceRecords(parsed);
       const detectedWeeks = new Set(parsed.map((row) => mondayOf(row.tradeDate)));
       const isHistoricalLocalBase = type === "local_bond" && detectedWeeks.size > 1;
       const groups = new Map<string, ParsedBondRecord[]>();
@@ -216,6 +228,29 @@ export default function Workbench() {
     if (file) void upload(file, type);
   }
 
+  async function generateSpreadRange() {
+    if (!analysisStart || !analysisEnd || analysisStart > analysisEnd) {
+      setMessage("请选择有效的利差分析日期区间");
+      return;
+    }
+    setChartLoading(true);
+    try {
+      const response = await fetch(`/api/workbench?startDate=${analysisStart}&endDate=${analysisEnd}`);
+      const payload = await response.json() as { records?: StoredRecord[]; error?: string };
+      if (!response.ok) throw new Error(payload.error || "读取区间数据失败");
+      const stored = (payload.records || []).map(normalize);
+      const fromCurrentFile = spreadSourceRecords.filter(row => row.tradeDate >= analysisStart && row.tradeDate <= analysisEnd);
+      const merged = new Map<string, ParsedBondRecord>();
+      [...stored, ...fromCurrentFile].forEach(row => merged.set(`${row.tradeDate}|${row.bondCode || row.shortName || ""}`, row));
+      const selected = [...merged.values()].sort((a, b) => `${a.tradeDate}${a.bondCode}`.localeCompare(`${b.tradeDate}${b.bondCode}`));
+      setChartRecords(selected);
+      setChartRange({ start: analysisStart, end: analysisEnd });
+      setMessage(selected.length ? `已生成 ${analysisStart} 至 ${analysisEnd} 的利差图，共 ${selected.length} 条记录` : "所选区间暂无已入库的一二级数据");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "生成区间利差图失败");
+    } finally { setChartLoading(false); }
+  }
+
   async function deleteImport(importId: string) {
     const response = await fetch(`/api/workbench?importId=${encodeURIComponent(importId)}`, { method: "DELETE" });
     if (response.ok) await loadWeek();
@@ -245,7 +280,7 @@ export default function Workbench() {
       canvas.toBlob((png) => {
         if (!png) return;
         const a = document.createElement("a"); a.href = URL.createObjectURL(png);
-        a.download = `本周国债政金债一二级利差_${weekStart}.png`; a.click();
+        a.download = `国债政金债一二级利差_${chartRange.start}_${chartRange.end}.png`; a.click();
         URL.revokeObjectURL(a.href); URL.revokeObjectURL(url);
       }, "image/png");
     };
@@ -342,8 +377,15 @@ export default function Workbench() {
         </section>}
 
         {(active === "overview" || active === "spread") && <section className="panel">
-          <div className="panel-head"><div><span className="section-label">PRIMARY / SECONDARY</span><h2>一二级利差可视化</h2></div><button className="secondary" onClick={downloadChart} disabled={!ordinary.length}><Download/>下载 PNG</button></div>
-          <SpreadChart records={spreadRecords} svgRef={svgRef}/>
+          <div className="panel-head spread-panel-head"><div><span className="section-label">PRIMARY / SECONDARY</span><h2>一二级利差可视化</h2></div><button className="secondary" onClick={downloadChart} disabled={!chartRecords.length}><Download/>下载 PNG</button></div>
+          <div className="range-toolbar">
+            <label><span>开始日期</span><input type="date" value={analysisStart} onChange={event => setAnalysisStart(event.target.value)}/></label>
+            <span className="range-divider">至</span>
+            <label><span>结束日期</span><input type="date" value={analysisEnd} onChange={event => setAnalysisEnd(event.target.value)}/></label>
+            <button className="range-generate" onClick={generateSpreadRange} disabled={chartLoading}>{chartLoading ? <LoaderCircle className="spin"/> : <BarChart3/>}生成图表</button>
+            <p>当前区间：{chartRange.start} 至 {chartRange.end} · {chartRecords.length} 条记录</p>
+          </div>
+          <SpreadChart records={chartRecords} svgRef={svgRef} startDate={chartRange.start} endDate={chartRange.end}/>
         </section>}
 
         {(active === "overview" || active === "summary") && <section className="panel">

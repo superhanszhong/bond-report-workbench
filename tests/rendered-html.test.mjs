@@ -21,6 +21,9 @@ test("server-renders the bond issuance workbench", async () => {
   assert.match(html, /利率债发行工作台/);
   assert.match(html, /地方债日表/);
   assert.match(html, /一二级利差/);
+  assert.match(html, /开始日期/);
+  assert.match(html, /结束日期/);
+  assert.match(html, /生成图表/);
   assert.match(html, /周报生成/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });

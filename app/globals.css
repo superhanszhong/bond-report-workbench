@@ -107,6 +107,17 @@ button { color: inherit; }
 .day-title span { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
 .day-block pre { margin: 0; padding: 16px 18px; border-radius: 9px; background: #faf9f7; color: #47484a; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 12px; line-height: 1.75; white-space: pre-wrap; }
 .chart-wrap { margin-top: 20px; position: relative; border: 1px solid #ebe6e2; border-radius: 11px; overflow: hidden; background: #fff; }
+.range-toolbar { margin-top: 18px; padding: 13px 14px; display: flex; align-items: flex-end; gap: 10px; border: 1px solid #e3e2de; border-radius: 10px; background: #faf9f6; }
+.range-toolbar label { display: grid; gap: 5px; }
+.range-toolbar label span { color: var(--muted); font-size: 10px; font-weight: 700; }
+.range-toolbar input { min-height: 36px; padding: 0 9px; border: 1px solid #dcd9d3; border-radius: 7px; outline: none; background: #fff; color: #4d4f52; font-size: 12px; }
+.range-toolbar input:focus { border-color: var(--sky-deep); box-shadow: 0 0 0 3px rgba(94,135,147,.1); }
+.range-divider { padding-bottom: 10px; color: #9a9893; font-size: 11px; }
+.range-generate { min-height: 36px; padding: 0 14px; border: 0; border-radius: 7px; display: flex; align-items: center; gap: 7px; background: var(--sky); color: #3f6872; cursor: pointer; font-size: 12px; font-weight: 800; }
+.range-generate:hover { background: #cae6ec; }
+.range-generate:disabled { opacity: .55; cursor: wait; }
+.range-generate svg { width: 15px; }
+.range-toolbar p { margin: 0 0 9px auto; color: var(--muted); font-size: 10px; }
 .spread-chart { display: block; width: 100%; height: auto; aspect-ratio: 8/5; }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #8b8b8a; background: rgba(255,255,255,.86); font-size: 13px; }
 .summary-editor { width: 100%; min-height: 210px; margin-top: 19px; padding: 18px; resize: vertical; border: 1px solid var(--line); border-radius: 10px; outline: none; background: #fbfaf9; color: #323436; font-size: 14px; line-height: 1.8; }
@@ -159,5 +170,10 @@ button { color: inherit; }
   .upload-actions { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: 1fr 1fr; }
   .day-block { grid-template-columns: 1fr; gap: 9px; }
+  .range-toolbar { align-items: stretch; flex-wrap: wrap; }
+  .range-toolbar label { flex: 1 1 135px; }
+  .range-divider { display: none; }
+  .range-generate { flex: 1 1 100%; justify-content: center; }
+  .range-toolbar p { flex: 1 1 100%; margin: 3px 0 0; }
   .report-panel { align-items: flex-start; flex-direction: column; }
 }

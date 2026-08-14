@@ -89,6 +89,18 @@ export async function GET(request: Request) {
     const db = (env as unknown as WorkbenchEnv).DB;
     await ensureSchema(db);
     const url = new URL(request.url);
+    const startDate = url.searchParams.get("startDate");
+    const endDate = url.searchParams.get("endDate");
+    if (startDate || endDate) {
+      if (!isDate(startDate) || !isDate(endDate) || startDate > endDate) {
+        return Response.json({ error: "分析日期区间无效" }, { status: 400 });
+      }
+      const records = await db.prepare(`SELECT * FROM bond_records
+        WHERE owner_id = ? AND dataset_type = 'spread' AND trade_date BETWEEN ? AND ?
+        ORDER BY trade_date, id`)
+        .bind(SHARED_OWNER_ID, startDate, endDate).all();
+      return Response.json({ records: records.results });
+    }
     const weekStart = url.searchParams.get("weekStart");
     if (!isDate(weekStart)) {
       return Response.json({ error: "weekStart 必须为 YYYY-MM-DD" }, { status: 400 });
