@@ -424,7 +424,19 @@ export default function Workbench() {
       return;
     }
     const mmdd = (d: string) => d.slice(5).replace("-", "");
-    const blob = await buildWeeklyReportBlob({ weekStart, summary, localRecords, spreadRecords });
+    const previousStart = shiftWeek(weekStart, -1);
+    const yearStart = `${weekStart.slice(0, 4)}-01-01`;
+    const [previousResponse, ytdLocalResponse] = await Promise.all([
+      fetch(`/api/workbench?weekStart=${previousStart}`),
+      fetch(`/api/workbench?startDate=${yearStart}&endDate=${weekEnd}&datasetType=local_bond`),
+    ]);
+    const previousPayload = await previousResponse.json() as WeekData & { error?: string };
+    const ytdLocalPayload = await ytdLocalResponse.json() as { records?: StoredRecord[]; error?: string };
+    if (!previousResponse.ok) throw new Error(previousPayload.error || "读取上周数据失败");
+    if (!ytdLocalResponse.ok) throw new Error(ytdLocalPayload.error || "读取地方债年度数据失败");
+    const previousSpreadRecords = previousPayload.records.filter((row) => row.dataset_type === "spread").map(normalize);
+    const ytdLocalRecords = (ytdLocalPayload.records || []).map(normalize);
+    const blob = await buildWeeklyReportBlob({ weekStart, summary, localRecords, spreadRecords, previousSpreadRecords, ytdLocalRecords });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
     a.download = `利率债发行周报${mmdd(weekStart)}-${mmdd(weekEnd)}.docx`; a.click(); URL.revokeObjectURL(a.href);
   }

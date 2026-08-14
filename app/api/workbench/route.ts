@@ -102,10 +102,11 @@ export async function GET(request: Request) {
       if (!isDate(startDate) || !isDate(endDate) || startDate > endDate) {
         return Response.json({ error: "分析日期区间无效" }, { status: 400 });
       }
+      const datasetType = url.searchParams.get("datasetType") === "local_bond" ? "local_bond" : "spread";
       const records = await db.prepare(`SELECT * FROM bond_records
-        WHERE owner_id = ? AND dataset_type = 'spread' AND trade_date BETWEEN ? AND ?
+        WHERE owner_id = ? AND dataset_type = ? AND trade_date BETWEEN ? AND ?
         ORDER BY trade_date, id`)
-        .bind(SHARED_OWNER_ID, startDate, endDate).all();
+        .bind(SHARED_OWNER_ID, datasetType, startDate, endDate).all();
       return Response.json({ records: records.results });
     }
     const weekStart = url.searchParams.get("weekStart");

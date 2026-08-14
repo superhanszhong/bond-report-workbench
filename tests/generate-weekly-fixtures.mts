@@ -28,7 +28,15 @@ for (const fixture of fixtures) {
   if (Math.abs(localAmount - fixture.expectedLocalAmount) > 0.0001) throw new Error(`${fixture.start} 地方债规模不符`);
   const summary = spreadSummary(spreadRecords);
   if (!summary.includes("国债") || !summary.includes("DR浮息债")) throw new Error(`${fixture.start} 小结结构不完整`);
-  const blob = await buildWeeklyReportBlob({ weekStart: fixture.start, summary, localRecords, spreadRecords });
+  const previousStartDate = new Date(`${fixture.start}T12:00:00`);
+  previousStartDate.setDate(previousStartDate.getDate() - 7);
+  const previousEndDate = new Date(`${fixture.end}T12:00:00`);
+  previousEndDate.setDate(previousEndDate.getDate() - 7);
+  const previousStart = previousStartDate.toISOString().slice(0, 10);
+  const previousEnd = previousEndDate.toISOString().slice(0, 10);
+  const previousSpreadRecords = allSpread.filter(row => row.tradeDate >= previousStart && row.tradeDate <= previousEnd);
+  const ytdLocalRecords = allLocal.filter(row => row.tradeDate >= `${fixture.start.slice(0, 4)}-01-01` && row.tradeDate <= fixture.end);
+  const blob = await buildWeeklyReportBlob({ weekStart: fixture.start, summary, localRecords, spreadRecords, previousSpreadRecords, ytdLocalRecords });
   const name = `利率债发行周报${fixture.start.slice(5).replace("-", "")}-${fixture.end.slice(5).replace("-", "")}_网站回归测试.docx`;
   await writeFile(resolve(outputDir, name), Buffer.from(await blob.arrayBuffer()));
   console.log(JSON.stringify({ name, spreadCount: spreadRecords.length, localCount: localRecords.length, localAmount, summary }));
