@@ -262,10 +262,15 @@ export default function Workbench() {
   const [chartLoading, setChartLoading] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportStatus, setReportStatus] = useState("");
+  const [reportDownload, setReportDownload] = useState<{ url: string; name: string } | null>(null);
   const [latestDates, setLatestDates] = useState<LatestDates>({});
   const localInput = useRef<HTMLInputElement>(null);
   const spreadInput = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+
+  useEffect(() => () => {
+    if (reportDownload) URL.revokeObjectURL(reportDownload.url);
+  }, [reportDownload]);
 
   const records = useMemo(() => data.records.map(normalize), [data.records]);
   const localRecords = records.filter((_, i) => data.records[i]?.dataset_type === "local_bond");
@@ -439,13 +444,14 @@ export default function Workbench() {
       const ytdLocalRecords = (ytdLocalPayload.records || []).map(normalize);
       const blob = await buildWeeklyReportBlob({ weekStart, summary, localRecords, spreadRecords, previousSpreadRecords, ytdLocalRecords });
       const url = URL.createObjectURL(blob);
+      const fileName = `利率债发行周报${weekStart.replaceAll("-", "")}-${mmdd(weekEnd)}.docx`;
+      setReportDownload({ url, name: fileName });
       const a = document.createElement("a"); a.href = url;
-      a.download = `利率债发行周报${weekStart.replaceAll("-", "")}-${mmdd(weekEnd)}.docx`;
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      setReportStatus(legacySpreadData ? "已生成；当前为旧版入库数据，空缺字段以“-”显示，重新上传一二级表可补全。" : "周报已按今日母版生成并开始下载。屏幕未出现下载时，请检查浏览器下载提示。" );
+      setReportStatus(legacySpreadData ? "已生成；当前为旧版入库数据，空缺字段以“-”显示，重新上传一二级表可补全。" : "周报已按今日母版生成。若未自动下载，请使用下方下载链接。" );
     } catch (error) {
       const reason = error instanceof Error ? error.message : "生成失败";
       setReportStatus(`生成失败：${reason}`);
@@ -538,7 +544,7 @@ export default function Workbench() {
         </section>}
 
         {(active === "overview" || active === "report") && <section className="report-panel">
-          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>直接使用今日 Word 原文件作为母版，仅替换标题、统计数据、每日文字和表格内容。</p>{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}</div>
+          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>直接使用今日 Word 原文件作为母版，仅替换标题、统计数据、每日文字和表格内容。</p>{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}{reportDownload && <a className="report-download" href={reportDownload.url} download={reportDownload.name}><Download/>下载已生成周报</a>}</div>
           <button onClick={exportDocx} disabled={reportLoading || (!localRecords.length && !spreadRecords.length)}>{reportLoading ? <LoaderCircle className="spin"/> : <FileText/>}{reportLoading ? "生成中" : "生成 Word"}</button>
         </section>}
 
