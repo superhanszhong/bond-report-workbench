@@ -176,16 +176,31 @@ export default function Workbench() {
     setMessage(`正在解析 ${file.name}…`);
     try {
       const parsed = type === "local_bond" ? await parseLocalBondFile(file) : await parseSpreadFile(file);
-      const inWeek = parsed.filter((row) => row.tradeDate >= weekStart && row.tradeDate <= weekEnd);
-      if (!inWeek.length) throw new Error(`文件中没有 ${displayWeek(weekStart)} 的记录`);
-      const tradeDate = inWeek.map((r) => r.tradeDate).sort().at(-1)!;
-      const response = await fetch("/api/workbench", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ datasetType: type, tradeDate, weekStart, fileName: file.name, records: inWeek }),
-      });
-      const payload = await response.json() as { error?: string; count?: number };
-      if (!response.ok) throw new Error(payload.error || "保存失败");
-      setMessage(`已入库 ${payload.count} 条记录`);
+      const detectedWeeks = new Set(parsed.map((row) => mondayOf(row.tradeDate)));
+      const isHistoricalLocalBase = type === "local_bond" && detectedWeeks.size > 1;
+      const groups = new Map<string, ParsedBondRecord[]>();
+      if (isHistoricalLocalBase) {
+        parsed.forEach((row) => {
+          const recordWeek = mondayOf(row.tradeDate);
+          groups.set(recordWeek, [...(groups.get(recordWeek) || []), row]);
+        });
+      } else {
+        const inWeek = parsed.filter((row) => row.tradeDate >= weekStart && row.tradeDate <= weekEnd);
+        if (!inWeek.length) throw new Error(`文件中没有 ${displayWeek(weekStart)} 的记录`);
+        groups.set(weekStart, inWeek);
+      }
+      let saved = 0;
+      for (const [recordWeek, group] of groups) {
+        const tradeDate = group.map((r) => r.tradeDate).sort().at(-1)!;
+        const response = await fetch("/api/workbench", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ datasetType: type, tradeDate, weekStart: recordWeek, fileName: file.name, records: group }),
+        });
+        const payload = await response.json() as { error?: string; count?: number };
+        if (!response.ok) throw new Error(payload.error || "保存失败");
+        saved += payload.count || 0;
+      }
+      setMessage(isHistoricalLocalBase ? `全年底库已拆分为 ${groups.size} 个交易周，共入库 ${saved} 条记录` : `已入库 ${saved} 条记录`);
       await loadWeek();
     } catch (error) { setMessage(error instanceof Error ? error.message : "上传失败"); }
   }

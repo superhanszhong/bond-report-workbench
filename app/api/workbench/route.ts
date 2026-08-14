@@ -81,6 +81,7 @@ async function ensureSchema(db: D1Database) {
     db.prepare("CREATE INDEX IF NOT EXISTS idx_imports_owner_week ON imports(owner_id, week_start)"),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_records_owner_week_type ON bond_records(owner_id, week_start, dataset_type)"),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_records_owner_code_date ON bond_records(owner_id, bond_code, trade_date)"),
+    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_records_unique_bond_day ON bond_records(owner_id, dataset_type, trade_date, bond_code)"),
     db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_drafts_owner_week ON weekly_drafts(owner_id, week_start)"),
   ]);
 }
@@ -158,7 +159,26 @@ export async function POST(request: Request) {
         (import_id, owner_id, dataset_type, trade_date, week_start, bond_code, short_name, full_name,
          issuer, region, bond_type, issuance_route, venue, bid_time, tenor, amount, spread, floor_rate,
          fee, distribution_date, remark, raw_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(owner_id, dataset_type, trade_date, bond_code) DO UPDATE SET
+          import_id = excluded.import_id,
+          week_start = excluded.week_start,
+          short_name = excluded.short_name,
+          full_name = excluded.full_name,
+          issuer = excluded.issuer,
+          region = excluded.region,
+          bond_type = excluded.bond_type,
+          issuance_route = excluded.issuance_route,
+          venue = excluded.venue,
+          bid_time = excluded.bid_time,
+          tenor = excluded.tenor,
+          amount = excluded.amount,
+          spread = excluded.spread,
+          floor_rate = excluded.floor_rate,
+          fee = excluded.fee,
+          distribution_date = excluded.distribution_date,
+          remark = excluded.remark,
+          raw_json = excluded.raw_json`)
         .bind(
           importId, owner, payload.datasetType, row.tradeDate || payload.tradeDate, payload.weekStart,
           row.bondCode || null, row.shortName || null, row.fullName || null, row.issuer || null,

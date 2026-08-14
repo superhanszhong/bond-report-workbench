@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `idx_records_unique_bond_day` ON `bond_records` (`owner_id`,`dataset_type`,`trade_date`,`bond_code`);

@@ -38,6 +38,7 @@ export const bondRecords = sqliteTable("bond_records", {
 }, (table) => [
   index("idx_records_owner_week_type").on(table.ownerId, table.weekStart, table.datasetType),
   index("idx_records_owner_code_date").on(table.ownerId, table.bondCode, table.tradeDate),
+  uniqueIndex("idx_records_unique_bond_day").on(table.ownerId, table.datasetType, table.tradeDate, table.bondCode),
 ]);
 
 export const weeklyDrafts = sqliteTable("weekly_drafts", {

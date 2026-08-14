@@ -15,6 +15,13 @@
       "when": 1786727501351,
       "tag": "0001_tiresome_otto_octavius",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786728628421,
+      "tag": "0002_even_black_bolt",
+      "breakpoints": true
     }
   ]
 }
