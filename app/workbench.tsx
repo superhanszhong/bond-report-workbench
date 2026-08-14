@@ -44,6 +44,17 @@ type WeekData = {
 
 type LatestDates = { local_bond?: string; spread?: string };
 
+const SUMMARY_DRAFT_VERSION = "weekly-bond-summary-v2";
+
+function encodeSummaryDraft(text: string) {
+  return `${SUMMARY_DRAFT_VERSION}\n${text}`;
+}
+
+function decodeSummaryDraft(text?: string) {
+  if (!text?.startsWith(`${SUMMARY_DRAFT_VERSION}\n`)) return null;
+  return text.slice(SUMMARY_DRAFT_VERSION.length + 1);
+}
+
 const tabGroups = [
   { label: "工作台", items: [["overview", "本周总览"]] },
   { label: "地方债", items: [["local", "发行明细"]] },
@@ -263,6 +274,7 @@ export default function Workbench() {
   const ordinary = spreadRecords.filter((row) => row.spread !== null && row.spread !== undefined && !/绿债|绿色|主题债|浮息债/.test(row.remark || ""));
   const latestLocalDate = latestDates.local_bond || "暂无数据";
   const latestSpreadDate = latestDates.spread || "暂无数据";
+  const legacySpreadData = spreadRecords.length > 0 && spreadRecords.some((row) => !row.summaryMeta);
 
   async function loadWeek() {
     setLoading(true);
@@ -278,11 +290,15 @@ export default function Workbench() {
       setData(payload);
       setLatestDates(latestPayload.latestDates || {});
       const loadedSpread = payload.records.filter(r => r.dataset_type === "spread").map(normalize);
-      const generated = spreadSummary(loadedSpread);
+      const hasLegacySpread = loadedSpread.length > 0 && loadedSpread.some((row) => !row.summaryMeta);
+      const generated = hasLegacySpread
+        ? "当前一二级数据由旧版解析器入库，缺少发行渠道、备注、前次结果及边际投/中标量等字段。请重新上传原始一二级表，系统将按最新规则生成完整发行小结。"
+        : spreadSummary(loadedSpread);
       const latestSpreadImport = payload.imports.filter(item => item.dataset_type === "spread")
         .map(item => item.created_at).sort().at(-1) || "";
-      const draftIsCurrent = Boolean(payload.draft?.summary_text && payload.draft?.updated_at && payload.draft.updated_at >= latestSpreadImport);
-      setSummary(draftIsCurrent ? payload.draft?.summary_text || generated : generated);
+      const currentDraft = decodeSummaryDraft(payload.draft?.summary_text);
+      const draftIsCurrent = Boolean(currentDraft && payload.draft?.updated_at && payload.draft.updated_at >= latestSpreadImport && !hasLegacySpread);
+      setSummary(draftIsCurrent ? currentDraft || generated : generated);
       setAnalysisStart(weekStart);
       setAnalysisEnd(fridayOf(weekStart));
       setChartRange({ start: weekStart, end: fridayOf(weekStart) });
@@ -376,7 +392,7 @@ export default function Workbench() {
     try {
       const response = await fetch("/api/workbench", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "saveDraft", weekStart, summaryText: summary, reviewText: "" }),
+        body: JSON.stringify({ action: "saveDraft", weekStart, summaryText: encodeSummaryDraft(summary), reviewText: "" }),
       });
       if (!response.ok) throw new Error("保存失败");
       setMessage("发行小结草稿已保存");
@@ -403,6 +419,10 @@ export default function Workbench() {
   }
 
   async function exportDocx() {
+    if (legacySpreadData) {
+      setMessage("本周一二级数据为旧版解析格式，请重新上传原始一二级表后再生成客户版周报");
+      return;
+    }
     const mmdd = (d: string) => d.slice(5).replace("-", "");
     const blob = await buildWeeklyReportBlob({ weekStart, summary, localRecords, spreadRecords });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
@@ -489,7 +509,7 @@ export default function Workbench() {
         {(active === "overview" || active === "summary") && <section className="panel">
           <div className="panel-head"><div><span className="section-label">CLIENT COPY</span><h2>周报发行小结</h2></div><button className="secondary" onClick={saveDraft} disabled={saving}>{saving?<LoaderCircle className="spin"/>:<Save/>}保存草稿</button></div>
           <textarea className="summary-editor" value={summary} onChange={e=>setSummary(e.target.value)} placeholder="上传一二级表后自动生成，可在此复核和修改。"/>
-          <div className="audit-row"><Check/><span>国债逐只保留；政金债按发行渠道分层；绿债、主题债和浮息债从普通散点图中剔除。</span></div>
+          <div className="audit-row">{legacySpreadData ? <CircleAlert/> : <Check/>}<span>{legacySpreadData ? "旧版存量数据缺少新版小结字段，请重新上传原始一二级表后生成。" : "国债逐只保留；政金债按发行渠道分层；绿债、主题债和浮息债从普通散点图中剔除。"}</span></div>
         </section>}
 
         {(active === "overview" || active === "report") && <section className="report-panel">
