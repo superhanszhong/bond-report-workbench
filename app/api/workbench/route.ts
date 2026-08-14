@@ -89,6 +89,13 @@ export async function GET(request: Request) {
     const db = (env as unknown as WorkbenchEnv).DB;
     await ensureSchema(db);
     const url = new URL(request.url);
+    if (url.searchParams.get("meta") === "latest") {
+      const latest = await db.prepare(`SELECT dataset_type, MAX(trade_date) AS latest_date
+        FROM bond_records WHERE owner_id = ? GROUP BY dataset_type`)
+        .bind(SHARED_OWNER_ID).all<{ dataset_type: string; latest_date: string }>();
+      const latestDates = Object.fromEntries(latest.results.map(row => [row.dataset_type, row.latest_date]));
+      return Response.json({ latestDates });
+    }
     const startDate = url.searchParams.get("startDate");
     const endDate = url.searchParams.get("endDate");
     if (startDate || endDate) {

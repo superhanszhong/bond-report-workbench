@@ -57,40 +57,42 @@ button { color: inherit; }
 .notice-error { border-color: #efd1cb; background: #fff7f5; color: var(--danger); }
 .notice button { margin-left: auto; border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; }
 
-.hero-grid { display: grid; grid-template-columns: minmax(320px, .86fr) minmax(420px, 1.55fr); gap: 18px; }
-.status-card, .upload-card, .panel, .report-panel { border: 1px solid var(--line); background: var(--panel); border-radius: 14px; box-shadow: 0 11px 35px rgba(73,60,52,.035); }
-.status-card { min-height: 255px; padding: 25px; display: grid; grid-template-columns: 126px 1fr; grid-template-rows: auto 1fr; column-gap: 25px; background: linear-gradient(145deg,#fff 40%,#fdf7f3); }
-.status-card .section-label { grid-column: 1 / -1; }
-.progress-ring { --progress: 0%; width: 118px; height: 118px; align-self: center; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(var(--gold) var(--progress), #efeae6 0); position: relative; }
-.progress-ring::after { content: ""; position: absolute; inset: 9px; border-radius: 50%; background: #fff; }
-.progress-ring span { position: relative; z-index: 1; font-family: Georgia, serif; font-size: 25px; font-weight: 700; }
-.checklist { display: grid; align-content: center; gap: 13px; }
-.checklist > div { display: flex; align-items: center; gap: 10px; color: #78797b; font-size: 13px; }
-.checklist span { width: 25px; height: 25px; border-radius: 50%; display: grid; place-items: center; background: #f0efed; color: #8f8e8b; font-size: 11px; font-weight: 700; }
-.checklist span svg { width: 14px; }
-.checklist .done { color: #3f4a45; font-weight: 600; }
-.checklist .done span { background: var(--sky); color: var(--sky-deep); }
+.hero-grid { display: block; }
+.upload-card, .panel, .report-panel { border: 1px solid var(--line); background: var(--panel); border-radius: 14px; box-shadow: 0 11px 35px rgba(73,60,52,.035); }
 
 .upload-card { min-height: 255px; padding: 25px; background: linear-gradient(145deg,#fff 46%,#faf7ed); }
 .card-head, .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .card-head h2, .panel-head h2, .report-panel h2 { margin: 0; font-size: 19px; font-weight: 700; }
 .card-head > svg { color: #8a9295; width: 21px; }
 .upload-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 22px; }
-.upload-actions button { min-height: 126px; padding: 17px; display: flex; align-items: center; gap: 15px; border: 1px dashed #dfc47e; border-radius: 12px; background: var(--gold-soft); cursor: pointer; text-align: left; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease, background .15s ease; }
-.upload-actions button:nth-child(2) { border-color: #a9ced7; background: #eef8fa; }
+.upload-lane { min-width: 0; display: grid; gap: 8px; }
+.upload-actions button { width: 100%; min-height: 126px; padding: 17px; display: flex; align-items: center; gap: 15px; border: 1px dashed #dfc47e; border-radius: 12px; background: var(--gold-soft); cursor: pointer; text-align: left; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+.upload-actions .rate-drop { border-color: #a9ced7; background: #eef8fa; }
 .upload-actions button:hover, .upload-actions button.drag-active { transform: translateY(-2px); border-style: solid; border-color: var(--orange); box-shadow: 0 9px 24px rgba(142,103,49,.1); }
-.upload-actions button:nth-child(2):hover, .upload-actions button:nth-child(2).drag-active { border-color: #75aebb; background: var(--sky); box-shadow: 0 9px 24px rgba(77,128,140,.1); }
+.upload-actions .rate-drop:hover, .upload-actions .rate-drop.drag-active { border-color: #75aebb; background: var(--sky); box-shadow: 0 9px 24px rgba(77,128,140,.1); }
 .upload-actions button > svg { flex: 0 0 auto; width: 27px; color: var(--orange-deep); }
-.upload-actions button:nth-child(2) > svg { color: var(--sky-deep); }
+.upload-actions .rate-drop > svg { color: var(--sky-deep); }
 .upload-actions strong, .upload-actions small { display: block; }
 .upload-actions em { display: inline-block; margin-bottom: 7px; padding: 3px 7px; border-radius: 999px; background: rgba(216,184,100,.24); color: #765b25; font-size: 9px; font-style: normal; font-weight: 800; letter-spacing: .08em; }
-.upload-actions button:nth-child(2) em { background: rgba(94,135,147,.12); color: #4f7781; }
+.upload-actions .rate-drop em { background: rgba(94,135,147,.12); color: #4f7781; }
 .upload-actions strong { font-size: 14px; }
 .upload-actions small { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.5; font-weight: 400; }
+.latest-date { min-height: 40px; padding: 9px 12px; display: flex; align-items: center; gap: 8px; border: 1px solid #eadfbe; border-radius: 9px; background: #fcf8eb; color: #807665; font-size: 11px; }
+.latest-date svg { width: 15px; color: var(--gold); }
+.latest-date strong { margin-left: auto; color: #5d5139; font-size: 12px; }
+.spread-date { border-color: #d4e7eb; background: #f4fafb; }
+.spread-date svg { color: var(--sky-deep); }
+.spread-date strong { color: #466d76; }
 .upload-card > p { margin: 13px 0 0; color: #939291; font-size: 11px; }
 
-.metrics { margin: 18px 0; display: grid; grid-template-columns: repeat(4,1fr); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--panel); }
+.overview-section { margin: 18px 0; padding: 22px 24px 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 11px 35px rgba(73,60,52,.035); }
+.overview-heading h2 { margin: 0; font-size: 19px; }
+.metrics { margin-top: 16px; display: grid; grid-template-columns: repeat(4,1fr); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
 .metrics article { min-width: 0; padding: 20px 22px; border-right: 1px solid var(--line); }
+.metrics article:nth-child(1) { background: #fffaf2; }
+.metrics article:nth-child(2) { background: #f5fbfc; }
+.metrics article:nth-child(3) { background: #fff8f7; }
+.metrics article:nth-child(4) { background: #fafafa; }
 .metrics article:last-child { border-right: 0; }
 .metrics span, .metrics small { display: block; color: var(--muted); font-size: 11px; }
 .metrics strong { display: block; margin: 8px 0 5px; font-family: Georgia, serif; font-size: 29px; font-weight: 600; }

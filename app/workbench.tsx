@@ -40,6 +40,8 @@ type WeekData = {
   draft?: { summary_text?: string; review_text?: string } | null;
 };
 
+type LatestDates = { local_bond?: string; spread?: string };
+
 const tabGroups = [
   { label: "工作台", items: [["overview", "本周总览"]] },
   { label: "地方债", items: [["local", "发行明细"]] },
@@ -235,6 +237,7 @@ export default function Workbench() {
   const [chartRecords, setChartRecords] = useState<ParsedBondRecord[]>([]);
   const [spreadSourceRecords, setSpreadSourceRecords] = useState<ParsedBondRecord[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
+  const [latestDates, setLatestDates] = useState<LatestDates>({});
   const localInput = useRef<HTMLInputElement>(null);
   const spreadInput = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -246,14 +249,22 @@ export default function Workbench() {
   const dailyDates = Array.from(new Set(localRecords.map((row) => row.tradeDate))).sort();
   const localAmount = localRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
   const ordinary = spreadRecords.filter((row) => row.spread !== null && row.spread !== undefined && !/绿债|绿色|主题债|浮息债/.test(row.remark || ""));
+  const latestLocalDate = latestDates.local_bond || "暂无数据";
+  const latestSpreadDate = latestDates.spread || "暂无数据";
 
   async function loadWeek() {
     setLoading(true);
     try {
-      const response = await fetch(`/api/workbench?weekStart=${weekStart}`);
+      const [response, latestResponse] = await Promise.all([
+        fetch(`/api/workbench?weekStart=${weekStart}`),
+        fetch("/api/workbench?meta=latest"),
+      ]);
       const payload = await response.json() as WeekData & { error?: string };
+      const latestPayload = await latestResponse.json() as { latestDates?: LatestDates; error?: string };
       if (!response.ok) throw new Error(payload.error || "读取失败");
+      if (!latestResponse.ok) throw new Error(latestPayload.error || "读取最新日期失败");
       setData(payload);
+      setLatestDates(latestPayload.latestDates || {});
       const loadedSpread = payload.records.filter(r => r.dataset_type === "spread").map(normalize);
       const generated = spreadSummary(loadedSpread);
       setSummary(payload.draft?.summary_text || generated);
@@ -275,9 +286,9 @@ export default function Workbench() {
       const parsed = type === "local_bond" ? await parseLocalBondFile(file) : await parseSpreadFile(file);
       if (type === "spread") setSpreadSourceRecords(parsed);
       const detectedWeeks = new Set(parsed.map((row) => mondayOf(row.tradeDate)));
-      const isHistoricalLocalBase = type === "local_bond" && detectedWeeks.size > 1;
+      const isHistoricalBase = detectedWeeks.size > 1;
       const groups = new Map<string, ParsedBondRecord[]>();
-      if (isHistoricalLocalBase) {
+      if (isHistoricalBase) {
         parsed.forEach((row) => {
           const recordWeek = mondayOf(row.tradeDate);
           groups.set(recordWeek, [...(groups.get(recordWeek) || []), row]);
@@ -287,18 +298,25 @@ export default function Workbench() {
         if (!inWeek.length) throw new Error(`文件中没有 ${displayWeek(weekStart)} 的记录`);
         groups.set(weekStart, inWeek);
       }
+      if (isHistoricalBase) setMessage(`已识别 ${groups.size} 个交易周，正在同步到共享数据库…`);
       let saved = 0;
-      for (const [recordWeek, group] of groups) {
-        const tradeDate = group.map((r) => r.tradeDate).sort().at(-1)!;
-        const response = await fetch("/api/workbench", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ datasetType: type, tradeDate, weekStart: recordWeek, fileName: file.name, records: group }),
-        });
-        const payload = await response.json() as { error?: string; count?: number };
-        if (!response.ok) throw new Error(payload.error || "保存失败");
-        saved += payload.count || 0;
+      const entries = [...groups.entries()];
+      let cursor = 0;
+      async function saveNext() {
+        while (cursor < entries.length) {
+          const [recordWeek, group] = entries[cursor++];
+          const tradeDate = group.map((r) => r.tradeDate).sort().at(-1)!;
+          const response = await fetch("/api/workbench", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ datasetType: type, tradeDate, weekStart: recordWeek, fileName: file.name, records: group }),
+          });
+          const payload = await response.json() as { error?: string; count?: number };
+          if (!response.ok) throw new Error(payload.error || "保存失败");
+          saved += payload.count || 0;
+        }
       }
-      setMessage(isHistoricalLocalBase ? `全年底库已拆分为 ${groups.size} 个交易周，共入库 ${saved} 条记录` : `已入库 ${saved} 条记录`);
+      await Promise.all(Array.from({ length: Math.min(6, entries.length) }, () => saveNext()));
+      setMessage(isHistoricalBase ? `历史数据已同步至共享数据库：${groups.size} 个交易周，共 ${saved} 条记录` : `已入库 ${saved} 条记录`);
       await loadWeek();
     } catch (error) { setMessage(error instanceof Error ? error.message : "上传失败"); }
   }
@@ -411,34 +429,31 @@ export default function Workbench() {
         {message && <div className={`notice ${/失败|缺少|没有/.test(message) ? "notice-error" : ""}`}><CircleAlert size={17}/>{message}<button onClick={() => setMessage("")}><X size={15}/></button></div>}
 
         <section className="hero-grid">
-          <div className="status-card">
-            <div className="section-label">本周完成度</div>
-            <div className="progress-ring" style={{"--progress": `${Math.min(100,(data.imports.length>0?45:0)+(spreadRecords.length?35:0)+(summary?20:0))}%`} as React.CSSProperties}><span>{Math.min(100,(data.imports.length>0?45:0)+(spreadRecords.length?35:0)+(summary?20:0))}%</span></div>
-            <div className="checklist">
-              <div className={localRecords.length ? "done" : ""}><span>{localRecords.length ? <Check/> : "1"}</span>地方债日表入库</div>
-              <div className={spreadRecords.length ? "done" : ""}><span>{spreadRecords.length ? <Check/> : "2"}</span>一二级表入库</div>
-              <div className={summary ? "done" : ""}><span>{summary ? <Check/> : "3"}</span>小结草稿生成</div>
-            </div>
-          </div>
           <div className="upload-card">
             <div className="card-head"><div><span className="section-label">双板块入口</span><h2>拖入文件，自动归入对应板块</h2></div><Upload/></div>
             <div className="upload-actions">
-              <button
-                className={`drop-zone local-drop ${dragging === "local_bond" ? "drag-active" : ""}`}
-                onClick={() => localInput.current?.click()}
-                onDragEnter={event => { event.preventDefault(); setDragging("local_bond"); }}
-                onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
-                onDragLeave={() => setDragging(null)}
-                onDrop={event => dropFile(event, "local_bond")}
-              ><FileSpreadsheet/><span><em>地方债板块</em><strong>地方债发行明细</strong><small>拖入或点击选择 Excel<br/>生成日表并纳入周汇总</small></span></button>
-              <button
-                className={`drop-zone rate-drop ${dragging === "spread" ? "drag-active" : ""}`}
-                onClick={() => spreadInput.current?.click()}
-                onDragEnter={event => { event.preventDefault(); setDragging("spread"); }}
-                onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
-                onDragLeave={() => setDragging(null)}
-                onDrop={event => dropFile(event, "spread")}
-              ><BarChart3/><span><em>利率债板块</em><strong>国债及政金债一二级表</strong><small>拖入或点击选择 Excel<br/>生成利差图与发行小结</small></span></button>
+              <div className="upload-lane">
+                <button
+                  className={`drop-zone local-drop ${dragging === "local_bond" ? "drag-active" : ""}`}
+                  onClick={() => localInput.current?.click()}
+                  onDragEnter={event => { event.preventDefault(); setDragging("local_bond"); }}
+                  onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
+                  onDragLeave={() => setDragging(null)}
+                  onDrop={event => dropFile(event, "local_bond")}
+                ><FileSpreadsheet/><span><em>地方债板块</em><strong>地方债发行明细</strong><small>拖入或点击选择 Excel<br/>生成日表并纳入周汇总</small></span></button>
+                <div className="latest-date"><CalendarDays/><span>地方债最新发行日</span><strong>{latestLocalDate}</strong></div>
+              </div>
+              <div className="upload-lane">
+                <button
+                  className={`drop-zone rate-drop ${dragging === "spread" ? "drag-active" : ""}`}
+                  onClick={() => spreadInput.current?.click()}
+                  onDragEnter={event => { event.preventDefault(); setDragging("spread"); }}
+                  onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
+                  onDragLeave={() => setDragging(null)}
+                  onDrop={event => dropFile(event, "spread")}
+                ><BarChart3/><span><em>利率债板块</em><strong>国债及政金债一二级表</strong><small>拖入或点击选择 Excel<br/>生成利差图与发行小结</small></span></button>
+                <div className="latest-date spread-date"><CalendarDays/><span>一二级利差最新日期</span><strong>{latestSpreadDate}</strong></div>
+              </div>
             </div>
             <input ref={localInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"local_bond"); e.currentTarget.value=""; }}/>
             <input ref={spreadInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"spread"); e.currentTarget.value=""; }}/>
@@ -446,11 +461,14 @@ export default function Workbench() {
           </div>
         </section>
 
-        <section className="metrics">
-          <article><span>地方债发行</span><strong>{localAmount.toFixed(2)}</strong><small>亿元 · {localRecords.length}只</small></article>
-          <article><span>普通利率债样本</span><strong>{ordinary.length}</strong><small>只 · 已按周报口径筛选</small></article>
-          <article><span>正利差债券</span><strong>{ordinary.filter(r => (r.spread || 0)>0).length}</strong><small>只 · 综收高于二级</small></article>
-          <article><span>已入库批次</span><strong>{data.imports.length}</strong><small>个 · {dailyDates.length}个发行日</small></article>
+        <section className="overview-section">
+          <div className="overview-heading"><span className="section-label">WEEKLY OVERVIEW</span><h2>本周发行概览</h2></div>
+          <div className="metrics">
+            <article><span>地方债发行</span><strong>{localAmount.toFixed(2)}</strong><small>亿元 · {localRecords.length}只</small></article>
+            <article><span>普通利率债样本</span><strong>{ordinary.length}</strong><small>只 · 已按周报口径筛选</small></article>
+            <article><span>正利差债券</span><strong>{ordinary.filter(r => (r.spread || 0)>0).length}</strong><small>只 · 综收高于二级</small></article>
+            <article><span>已入库批次</span><strong>{data.imports.length}</strong><small>个 · {dailyDates.length}个发行日</small></article>
+          </div>
         </section>
 
         {(active === "overview" || active === "local") && <section className="panel">
