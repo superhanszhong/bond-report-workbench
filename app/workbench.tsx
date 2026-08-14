@@ -525,7 +525,7 @@ export default function Workbench() {
         </section>}
 
         {(active === "overview" || active === "report") && <section className="report-panel">
-          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>标题自动使用“利率债发行周报MMDD-MMDD”，正文黑色极简，地方债明细与发行回顾来自已入库数据。</p></div>
+          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>标题自动使用“利率债发行周报YYYYMMDD-MMDD”，按今日母版生成发行总结、周度统计、发行小结与每日回顾。</p></div>
           <button onClick={exportDocx} disabled={!localRecords.length && !spreadRecords.length}><FileText/>生成 Word</button>
         </section>}
 
