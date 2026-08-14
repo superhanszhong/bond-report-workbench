@@ -40,10 +40,13 @@ type WeekData = {
   draft?: { summary_text?: string; review_text?: string } | null;
 };
 
-const tabs = [
-  ["overview", "本周总览"], ["local", "地方债日表"], ["spread", "一二级利差"],
-  ["summary", "发行小结"], ["report", "周报生成"],
+const tabGroups = [
+  { label: "工作台", items: [["overview", "本周总览"]] },
+  { label: "地方债", items: [["local", "发行明细"]] },
+  { label: "利率债", items: [["spread", "一二级利差"], ["summary", "发行小结"], ["report", "周报生成"]] },
 ] as const;
+
+type TabKey = (typeof tabGroups)[number]["items"][number][0];
 
 function formatMd(value: string) {
   const date = new Date(`${value}T12:00:00`);
@@ -101,10 +104,10 @@ function SpreadChart({ records, svgRef }: { records: ParsedBondRecord[]; svgRef:
     <div className="chart-wrap">
       <svg ref={svgRef} className="spread-chart" viewBox="0 0 1680 1050" role="img" aria-label="本周国债、政金债发行一二级利差散点图">
         <rect width="1680" height="1050" fill="#fff" />
-        <rect width="1680" height="126" fill="#FAE7DA" />
-        <text x="78" y="72" fontSize="38" fontWeight="700" fill="#9A5748">本周国债、政金债发行一二级利差散点图</text>
+        <rect width="1680" height="126" fill="#F7E3CF" />
+        <text x="78" y="72" fontSize="38" fontWeight="700" fill="#9B642F">本周国债、政金债发行一二级利差散点图</text>
         <text x="80" y="166" fontSize="21" fill="#6b7280">利差口径：综收－二级（bp）｜散点口径：单券</text>
-        <text x="80" y="220" fontSize="23" fill="#68717b">普通债券样本 <tspan fontWeight="700" fill="#9A5748">{filtered.length}只</tspan> ｜ 正利差债券 <tspan fontWeight="700" fill="#9A5748">{filtered.filter(r => (r.spread || 0) > 0).length}只</tspan> ｜ 平均利差 <tspan fontWeight="700" fill="#9A5748">{avg.toFixed(2)}bp</tspan></text>
+        <text x="80" y="220" fontSize="23" fill="#68717b">普通债券样本 <tspan fontWeight="700" fill="#9B642F">{filtered.length}只</tspan> ｜ 正利差债券 <tspan fontWeight="700" fill="#9B642F">{filtered.filter(r => (r.spread || 0) > 0).length}只</tspan> ｜ 平均利差 <tspan fontWeight="700" fill="#9B642F">{avg.toFixed(2)}bp</tspan></text>
         <rect x="80" y={y(max)} width="1500" height={y(0) - y(max)} fill="#FFFCFA" />
         {[min, min + (max-min)/4, min + (max-min)/2, min + 3*(max-min)/4, max].map((tick) => (
           <g key={tick}>
@@ -112,23 +115,23 @@ function SpreadChart({ records, svgRef }: { records: ParsedBondRecord[]; svgRef:
             <text x="62" y={y(tick)+7} textAnchor="end" fontSize="20" fill="#747b84">{tick.toFixed(1)}</text>
           </g>
         ))}
-        <line x1="80" y1={y(0)} x2="1580" y2={y(0)} stroke="#EAB6A8" strokeWidth="3" strokeDasharray="10 8" />
+        <line x1="80" y1={y(0)} x2="1580" y2={y(0)} stroke="#D8B864" strokeWidth="3" strokeDasharray="10 8" />
         <line x1="80" y1={y(avg)} x2="1580" y2={y(avg)} stroke="#8b9299" strokeWidth="2" strokeDasharray="8 8" />
         {tenors.map((tenor) => <text key={tenor} x={x(tenor)} y="848" textAnchor="middle" fontSize="22" fontWeight="600" fill="#626a73">{tenor}</text>)}
         {filtered.map((row, index) => {
           const jitter = ((index % 5) - 2) * 13;
           const cy = y(row.spread || 0);
           const cx = x(row.tenor || "—") + jitter;
-          const colors: Record<string, string> = { treasury: "#F4CDC3", cdb: "#FAE1CC", exim: "#E5E5E3", adbc: "#D6EFF5" };
+          const colors: Record<string, string> = { treasury: "#F4D8D3", cdb: "#F7E3CF", exim: "#E6E7E5", adbc: "#D8EEF5" };
           const notable = (row.spread || 0) > 0 || (row.spread || 0) <= -1;
           return <g key={`${row.bondCode}-${index}`}>
-            <circle cx={cx} cy={cy} r={notable ? 13 : 9} fill={colors[tone(row.bondType || "")]} stroke="#8e776f" strokeWidth={notable ? 3 : 1} />
+            <circle cx={cx} cy={cy} r={notable ? 13 : 9} fill={colors[tone(row.bondType || "")]} stroke="#B8945D" strokeWidth={notable ? 3 : 1} />
             {notable && <text x={cx + 17} y={cy - 12} fontSize="17" fontWeight="600" fill="#42464d">{row.shortName || row.bondCode} {(row.spread || 0).toFixed(2)}</text>}
           </g>;
         })}
         <text x="830" y="920" textAnchor="middle" fontSize="23" fontWeight="600" fill="#626a73">发行期限</text>
         <text x="25" y="540" transform="rotate(-90 25 540)" textAnchor="middle" fontSize="22" fontWeight="600" fill="#626a73">综收－二级（bp）</text>
-        {[["国债","#F4CDC3"],["国开债","#FAE1CC"],["口行债","#E5E5E3"],["农发债","#D6EFF5"]].map(([label,color],i) => <g key={label} transform={`translate(${485+i*190},995)`}><circle r="11" fill={color}/><text x="22" y="7" fontSize="22" fontWeight="600" fill="#555b63">{label}</text></g>)}
+        {[["国债","#F4D8D3"],["国开债","#F7E3CF"],["口行债","#E6E7E5"],["农发债","#D8EEF5"]].map(([label,color],i) => <g key={label} transform={`translate(${485+i*190},995)`}><circle r="11" fill={color}/><text x="22" y="7" fontSize="22" fontWeight="600" fill="#555b63">{label}</text></g>)}
       </svg>
       {!filtered.length && <div className="chart-empty">上传一二级表后，这里自动生成本周利差图</div>}
     </div>
@@ -137,12 +140,13 @@ function SpreadChart({ records, svgRef }: { records: ParsedBondRecord[]; svgRef:
 
 export default function Workbench() {
   const [weekStart, setWeekStart] = useState(() => mondayOf(new Date()));
-  const [active, setActive] = useState<(typeof tabs)[number][0]>("overview");
+  const [active, setActive] = useState<TabKey>("overview");
   const [data, setData] = useState<WeekData>({ imports: [], records: [] });
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [summary, setSummary] = useState("");
   const [saving, setSaving] = useState(false);
+  const [dragging, setDragging] = useState<"local_bond" | "spread" | null>(null);
   const localInput = useRef<HTMLInputElement>(null);
   const spreadInput = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -203,6 +207,13 @@ export default function Workbench() {
       setMessage(isHistoricalLocalBase ? `全年底库已拆分为 ${groups.size} 个交易周，共入库 ${saved} 条记录` : `已入库 ${saved} 条记录`);
       await loadWeek();
     } catch (error) { setMessage(error instanceof Error ? error.message : "上传失败"); }
+  }
+
+  function dropFile(event: React.DragEvent<HTMLButtonElement>, type: "local_bond" | "spread") {
+    event.preventDefault();
+    setDragging(null);
+    const file = event.dataTransfer.files?.[0];
+    if (file) void upload(file, type);
   }
 
   async function deleteImport(importId: string) {
@@ -269,9 +280,9 @@ export default function Workbench() {
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">债</span><div><strong>利率债发行工作台</strong><small>Issuance Desk</small></div></div>
-        <nav>{tabs.map(([key, label]) => <button key={key} className={active === key ? "nav-active" : ""} onClick={() => setActive(key)}>{key === "overview" ? <CalendarDays/> : key === "local" ? <FileSpreadsheet/> : key === "spread" ? <BarChart3/> : <FileText/>}<span>{label}</span></button>)}</nav>
+        <nav>{tabGroups.map(group => <div className="nav-group" key={group.label}><span className="nav-group-label">{group.label}</span>{group.items.map(([key, label]) => <button key={key} className={active === key ? "nav-active" : ""} onClick={() => setActive(key)}>{key === "overview" ? <CalendarDays/> : key === "local" ? <FileSpreadsheet/> : key === "spread" ? <BarChart3/> : <FileText/>}<span>{label}</span></button>)}</div>)}</nav>
         <a className="legacy-link" href="https://superhanszhong.github.io/local-bond-daily-converter/" target="_blank" rel="noreferrer">原日表转换器 ↗</a>
-        <div className="side-note"><Check size={16}/><span>数据按账号隔离<br/>周度草稿自动保存</span></div>
+        <div className="side-note"><Check size={16}/><span>公开共享数据<br/>周度记录集中留存</span></div>
       </aside>
 
       <section className="workspace">
@@ -293,14 +304,28 @@ export default function Workbench() {
             </div>
           </div>
           <div className="upload-card">
-            <div className="card-head"><div><span className="section-label">每日入口</span><h2>上传并记录发行数据</h2></div><Upload/></div>
+            <div className="card-head"><div><span className="section-label">双板块入口</span><h2>拖入文件，自动归入对应板块</h2></div><Upload/></div>
             <div className="upload-actions">
-              <button onClick={() => localInput.current?.click()}><FileSpreadsheet/><span><strong>地方债发行表</strong><small>生成日表并纳入周汇总</small></span></button>
-              <button onClick={() => spreadInput.current?.click()}><BarChart3/><span><strong>一二级分析表</strong><small>生成利差图与发行小结</small></span></button>
+              <button
+                className={`drop-zone local-drop ${dragging === "local_bond" ? "drag-active" : ""}`}
+                onClick={() => localInput.current?.click()}
+                onDragEnter={event => { event.preventDefault(); setDragging("local_bond"); }}
+                onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
+                onDragLeave={() => setDragging(null)}
+                onDrop={event => dropFile(event, "local_bond")}
+              ><FileSpreadsheet/><span><em>地方债板块</em><strong>地方债发行明细</strong><small>拖入或点击选择 Excel<br/>生成日表并纳入周汇总</small></span></button>
+              <button
+                className={`drop-zone rate-drop ${dragging === "spread" ? "drag-active" : ""}`}
+                onClick={() => spreadInput.current?.click()}
+                onDragEnter={event => { event.preventDefault(); setDragging("spread"); }}
+                onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
+                onDragLeave={() => setDragging(null)}
+                onDrop={event => dropFile(event, "spread")}
+              ><BarChart3/><span><em>利率债板块</em><strong>国债及政金债一二级表</strong><small>拖入或点击选择 Excel<br/>生成利差图与发行小结</small></span></button>
             </div>
-            <input ref={localInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => e.target.files?.[0] && upload(e.target.files[0],"local_bond")}/>
-            <input ref={spreadInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => e.target.files?.[0] && upload(e.target.files[0],"spread")}/>
-            <p>同一天可重复上传；需要替换时先在“本周文件”中删除旧批次。</p>
+            <input ref={localInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"local_bond"); e.currentTarget.value=""; }}/>
+            <input ref={spreadInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"spread"); e.currentTarget.value=""; }}/>
+            <p>将文件拖入对应色块即可上传；重复上传同一债券时更新已有记录。</p>
           </div>
         </section>
 
