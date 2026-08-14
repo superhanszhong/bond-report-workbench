@@ -260,6 +260,8 @@ export default function Workbench() {
   const [chartRecords, setChartRecords] = useState<ParsedBondRecord[]>([]);
   const [spreadSourceRecords, setSpreadSourceRecords] = useState<ParsedBondRecord[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportStatus, setReportStatus] = useState("");
   const [latestDates, setLatestDates] = useState<LatestDates>({});
   const localInput = useRef<HTMLInputElement>(null);
   const spreadInput = useRef<HTMLInputElement>(null);
@@ -419,26 +421,34 @@ export default function Workbench() {
   }
 
   async function exportDocx() {
-    if (legacySpreadData) {
-      setMessage("本周一二级数据为旧版解析格式，请重新上传原始一二级表后再生成客户版周报");
-      return;
+    setReportLoading(true);
+    setReportStatus("正在按今日 Word 母版填充数据…");
+    try {
+      const mmdd = (d: string) => d.slice(5).replace("-", "");
+      const previousStart = shiftWeek(weekStart, -1);
+      const yearStart = `${weekStart.slice(0, 4)}-01-01`;
+      const [previousResponse, ytdLocalResponse] = await Promise.all([
+        fetch(`/api/workbench?weekStart=${previousStart}`),
+        fetch(`/api/workbench?startDate=${yearStart}&endDate=${weekEnd}&datasetType=local_bond`),
+      ]);
+      const previousPayload = await previousResponse.json() as WeekData & { error?: string };
+      const ytdLocalPayload = await ytdLocalResponse.json() as { records?: StoredRecord[]; error?: string };
+      if (!previousResponse.ok) throw new Error(previousPayload.error || "读取上周数据失败");
+      if (!ytdLocalResponse.ok) throw new Error(ytdLocalPayload.error || "读取地方债年度数据失败");
+      const previousSpreadRecords = previousPayload.records.filter((row) => row.dataset_type === "spread").map(normalize);
+      const ytdLocalRecords = (ytdLocalPayload.records || []).map(normalize);
+      const blob = await buildWeeklyReportBlob({ weekStart, summary, localRecords, spreadRecords, previousSpreadRecords, ytdLocalRecords });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url;
+      a.download = `利率债发行周报${weekStart.replaceAll("-", "")}-${mmdd(weekEnd)}.docx`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setReportStatus(legacySpreadData ? "已生成；当前为旧版入库数据，空缺字段以“-”显示，重新上传一二级表可补全。" : "周报已按今日母版生成并开始下载。屏幕未出现下载时，请检查浏览器下载提示。" );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "生成失败";
+      setReportStatus(`生成失败：${reason}`);
+    } finally {
+      setReportLoading(false);
     }
-    const mmdd = (d: string) => d.slice(5).replace("-", "");
-    const previousStart = shiftWeek(weekStart, -1);
-    const yearStart = `${weekStart.slice(0, 4)}-01-01`;
-    const [previousResponse, ytdLocalResponse] = await Promise.all([
-      fetch(`/api/workbench?weekStart=${previousStart}`),
-      fetch(`/api/workbench?startDate=${yearStart}&endDate=${weekEnd}&datasetType=local_bond`),
-    ]);
-    const previousPayload = await previousResponse.json() as WeekData & { error?: string };
-    const ytdLocalPayload = await ytdLocalResponse.json() as { records?: StoredRecord[]; error?: string };
-    if (!previousResponse.ok) throw new Error(previousPayload.error || "读取上周数据失败");
-    if (!ytdLocalResponse.ok) throw new Error(ytdLocalPayload.error || "读取地方债年度数据失败");
-    const previousSpreadRecords = previousPayload.records.filter((row) => row.dataset_type === "spread").map(normalize);
-    const ytdLocalRecords = (ytdLocalPayload.records || []).map(normalize);
-    const blob = await buildWeeklyReportBlob({ weekStart, summary, localRecords, spreadRecords, previousSpreadRecords, ytdLocalRecords });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-    a.download = `利率债发行周报${mmdd(weekStart)}-${mmdd(weekEnd)}.docx`; a.click(); URL.revokeObjectURL(a.href);
   }
 
   return (
@@ -525,8 +535,8 @@ export default function Workbench() {
         </section>}
 
         {(active === "overview" || active === "report") && <section className="report-panel">
-          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>标题自动使用“利率债发行周报YYYYMMDD-MMDD”，按今日母版生成发行总结、周度统计、发行小结与每日回顾。</p></div>
-          <button onClick={exportDocx} disabled={!localRecords.length && !spreadRecords.length}><FileText/>生成 Word</button>
+          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>直接使用今日 Word 原文件作为母版，仅替换标题、统计数据、每日文字和表格内容。</p>{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}</div>
+          <button onClick={exportDocx} disabled={reportLoading || (!localRecords.length && !spreadRecords.length)}>{reportLoading ? <LoaderCircle className="spin"/> : <FileText/>}{reportLoading ? "生成中" : "生成 Word"}</button>
         </section>}
 
         <section className="panel compact-panel">

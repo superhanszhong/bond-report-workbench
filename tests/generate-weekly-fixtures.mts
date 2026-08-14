@@ -5,6 +5,7 @@ import { parseLocalBondFile, parseSpreadFile, spreadSummary } from "../app/lib/w
 
 const spreadPath = "/Users/zhonghanji/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_o1ibaqan2uon21_d019/temp/drag/利率债一二级分析0814(5).xlsx";
 const localPath = "/Users/zhonghanji/Downloads/地方政府债+2026-08-15.xlsx";
+const templatePath = "/Users/zhonghanji/Desktop/利率债发行周报20260814(8).docx";
 const outputDir = resolve("../outputs/site-regression");
 
 const asFile = async (path: string) => new File([await readFile(path)], basename(path));
@@ -12,6 +13,8 @@ const [allSpread, allLocal] = await Promise.all([
   parseSpreadFile(await asFile(spreadPath)),
   parseLocalBondFile(await asFile(localPath)),
 ]);
+const templateBuffer = await readFile(templatePath);
+const templateBytes = templateBuffer.buffer.slice(templateBuffer.byteOffset, templateBuffer.byteOffset + templateBuffer.byteLength) as ArrayBuffer;
 
 const fixtures = [
   { start: "2026-08-03", end: "2026-08-07", expectedSpread: 29, expectedLocal: 31, expectedLocalAmount: 1818.4003 },
@@ -36,7 +39,7 @@ for (const fixture of fixtures) {
   const previousEnd = previousEndDate.toISOString().slice(0, 10);
   const previousSpreadRecords = allSpread.filter(row => row.tradeDate >= previousStart && row.tradeDate <= previousEnd);
   const ytdLocalRecords = allLocal.filter(row => row.tradeDate >= `${fixture.start.slice(0, 4)}-01-01` && row.tradeDate <= fixture.end);
-  const blob = await buildWeeklyReportBlob({ weekStart: fixture.start, summary, localRecords, spreadRecords, previousSpreadRecords, ytdLocalRecords });
+  const blob = await buildWeeklyReportBlob({ weekStart: fixture.start, summary, localRecords, spreadRecords, previousSpreadRecords, ytdLocalRecords, templateBytes });
   const name = `利率债发行周报${fixture.start.slice(5).replace("-", "")}-${fixture.end.slice(5).replace("-", "")}_网站回归测试.docx`;
   await writeFile(resolve(outputDir, name), Buffer.from(await blob.arrayBuffer()));
   console.log(JSON.stringify({ name, spreadCount: spreadRecords.length, localCount: localRecords.length, localAmount, summary }));
