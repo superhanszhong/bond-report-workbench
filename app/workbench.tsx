@@ -337,7 +337,9 @@ export default function Workbench() {
         groups.set(weekStart, inWeek);
       }
       if (isHistoricalBase) setMessage(`已识别 ${groups.size} 个交易周，正在同步到共享数据库…`);
-      let saved = 0;
+      let added = 0;
+      let updated = 0;
+      let unchanged = 0;
       const entries = [...groups.entries()];
       let cursor = 0;
       async function saveNext() {
@@ -348,13 +350,16 @@ export default function Workbench() {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ datasetType: type, tradeDate, weekStart: recordWeek, fileName: file.name, records: group }),
           });
-          const payload = await response.json() as { error?: string; count?: number };
+          const payload = await response.json() as { error?: string; inserted?: number; updated?: number; unchanged?: number };
           if (!response.ok) throw new Error(payload.error || "保存失败");
-          saved += payload.count || 0;
+          added += payload.inserted || 0;
+          updated += payload.updated || 0;
+          unchanged += payload.unchanged || 0;
         }
       }
       await Promise.all(Array.from({ length: Math.min(6, entries.length) }, () => saveNext()));
-      setMessage(isHistoricalBase ? `历史数据已同步至共享数据库：${groups.size} 个交易周，共 ${saved} 条记录` : `已入库 ${saved} 条记录`);
+      const result = `新增${added}条，更新${updated}条，保留${unchanged}条未变化记录`;
+      setMessage(isHistoricalBase ? `历史数据已同步至共享数据库：${groups.size} 个交易周，${result}` : `已入库：${result}`);
       await loadWeek();
     } catch (error) { setMessage(error instanceof Error ? error.message : "上传失败"); }
   }

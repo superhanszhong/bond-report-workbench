@@ -1,25 +1,5 @@
 import { env } from "cloudflare:workers";
-
-type RecordPayload = {
-  tradeDate?: string;
-  bondCode?: string;
-  shortName?: string;
-  fullName?: string;
-  issuer?: string;
-  region?: string;
-  bondType?: string;
-  issuanceRoute?: string;
-  venue?: string;
-  bidTime?: string;
-  tenor?: string;
-  amount?: number | null;
-  spread?: number | null;
-  floorRate?: number | null;
-  fee?: number | null;
-  distributionDate?: string;
-  remark?: string;
-  raw?: Record<string, unknown>;
-};
+import { mergeRecord, recordKey, type RecordPayload, type StoredRecord } from "../../lib/record-merge";
 
 interface WorkbenchEnv {
   DB: D1Database;
@@ -165,14 +145,31 @@ export async function POST(request: Request) {
     if (!payload.datasetType || !payload.fileName || !Array.isArray(payload.records) || payload.records.length === 0) {
       return Response.json({ error: "上传数据不完整" }, { status: 400 });
     }
+    const existingRows = await db.prepare(`SELECT * FROM bond_records
+      WHERE owner_id = ? AND dataset_type = ? AND week_start = ?`)
+      .bind(owner, payload.datasetType, payload.weekStart).all<StoredRecord>();
+    const existingByKey = new Map(existingRows.results.map(row => [recordKey({
+      tradeDate: String(row.trade_date || ""), bondCode: String(row.bond_code || ""),
+    }), row]));
+    const mergedRows = payload.records.map((row) => {
+      const normalized = { ...row, tradeDate: row.tradeDate || payload.tradeDate };
+      const existing = existingByKey.get(recordKey(normalized));
+      return { existing, ...mergeRecord(normalized, existing) };
+    });
+    const changes = mergedRows.filter(row => row.changed);
+    const inserted = changes.filter(row => !row.existing).length;
+    const updated = changes.length - inserted;
+    if (!changes.length) {
+      return Response.json({ ok: true, count: 0, inserted: 0, updated: 0, unchanged: payload.records.length });
+    }
     const importId = crypto.randomUUID();
     const now = new Date().toISOString();
     const statements = [
       db.prepare(`INSERT INTO imports
         (id, owner_id, dataset_type, trade_date, week_start, file_name, record_count, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .bind(importId, owner, payload.datasetType, payload.tradeDate, payload.weekStart, payload.fileName, payload.records.length, now),
-      ...payload.records.map((row) => db.prepare(`INSERT INTO bond_records
+        .bind(importId, owner, payload.datasetType, payload.tradeDate, payload.weekStart, payload.fileName, changes.length, now),
+      ...changes.map(({ record: row }) => db.prepare(`INSERT INTO bond_records
         (import_id, owner_id, dataset_type, trade_date, week_start, bond_code, short_name, full_name,
          issuer, region, bond_type, issuance_route, venue, bid_time, tenor, amount, spread, floor_rate,
          fee, distribution_date, remark, raw_json)
@@ -206,7 +203,7 @@ export async function POST(request: Request) {
         )),
     ];
     await db.batch(statements);
-    return Response.json({ ok: true, importId, count: payload.records.length }, { status: 201 });
+    return Response.json({ ok: true, importId, count: changes.length, inserted, updated, unchanged: payload.records.length - changes.length }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "保存上传数据失败";
     return Response.json({ error: message }, { status: 500 });
