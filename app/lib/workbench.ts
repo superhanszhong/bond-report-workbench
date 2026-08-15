@@ -36,6 +36,7 @@ export type SpreadSummaryMeta = {
   previous?: {
     date: string;
     code: string;
+    comparisonType: "same_bond" | "discount_comparator";
     displaySpreadText: string;
     auctionSpreadText: string;
     allInText: string;
@@ -221,6 +222,18 @@ function baseBondCode(code: string) {
   return code.replace(/[XZ]\d*$/i, "");
 }
 
+function isDiscountBond(record: Pick<ParsedBondRecord, "tenor">) {
+  return /D$/i.test(record.tenor || "");
+}
+
+function isReopenedBond(record: Pick<ParsedBondRecord, "bondCode">) {
+  return /[XZ]\d*$/i.test(record.bondCode || "");
+}
+
+function discountComparatorKey(record: Pick<ParsedBondRecord, "bondType" | "tenor" | "summaryMeta" | "remark">) {
+  return [record.bondType || "", (record.tenor || "").toUpperCase(), record.summaryMeta?.rateType || rateTypeFromRemark(record.remark || "")].join("|");
+}
+
 function rateTypeFromRemark(remark: string) {
   if (/DR/i.test(remark)) return "DR浮息债";
   if (/LPR/i.test(remark)) return "LPR浮息债";
@@ -317,19 +330,24 @@ export async function parseSpreadFile(file: File) {
     }
   });
   candidates.sort((a, b) => `${a.tradeDate}|${String(a.order).padStart(8, "0")}`.localeCompare(`${b.tradeDate}|${String(b.order).padStart(8, "0")}`));
-  const history = new Map<string, ParsedBondRecord>();
+  const sameBondHistory = new Map<string, ParsedBondRecord>();
+  const discountHistory = new Map<string, ParsedBondRecord>();
   const records: ParsedBondRecord[] = candidates.map(({ order: _order, ...record }) => {
     const meta = record.summaryMeta!;
-    const previous = history.get(meta.baseCode);
+    const comparisonType = isDiscountBond(record) ? "discount_comparator" : isReopenedBond(record) ? "same_bond" : null;
+    const previous = comparisonType === "discount_comparator"
+      ? discountHistory.get(discountComparatorKey(record))
+      : comparisonType === "same_bond" ? sameBondHistory.get(meta.baseCode) : undefined;
     if (previous?.summaryMeta) {
       meta.previous = {
-        date: previous.tradeDate, code: previous.bondCode || "", displaySpreadText: previous.summaryMeta.displaySpreadText,
+        date: previous.tradeDate, code: previous.bondCode || "", comparisonType, displaySpreadText: previous.summaryMeta.displaySpreadText,
         auctionSpreadText: previous.summaryMeta.auctionSpreadText, allInText: previous.summaryMeta.allInText,
         secondaryText: previous.summaryMeta.secondaryText, note: previous.remark || "", spread: previous.spread ?? null,
       };
     }
     record.raw = { ...(record.raw || {}), __summaryMeta: meta };
-    history.set(meta.baseCode, record);
+    sameBondHistory.set(meta.baseCode, record);
+    if (isDiscountBond(record)) discountHistory.set(discountComparatorKey(record), record);
     return record;
   });
   if (!records.length) throw new Error("未识别到一二级利差明细，请检查表头");
@@ -385,6 +403,10 @@ export function spreadSummary(records: ParsedBondRecord[]) {
     if (previous <= 0 && current > 0) return "由负转正";
     return current === 0 ? "收窄至持平" : "由持平转为利差";
   };
+  const comparablePrevious = (row: ParsedBondRecord) => {
+    const previous = row.summaryMeta?.previous;
+    return previous && (isDiscountBond(row) || isReopenedBond(row)) ? previous : undefined;
+  };
   const sections: string[] = [];
   const maturityOrder = (value = "") => {
     const numeric = Number.parseFloat(value);
@@ -395,20 +417,28 @@ export function spreadSummary(records: ParsedBondRecord[]) {
   };
   const treasury = supported.filter((row) => row.bondType === "国债").sort((a, b) =>
     a.tradeDate.localeCompare(b.tradeDate) || maturityOrder(a.tenor) - maturityOrder(b.tenor));
-  if (treasury.length) {
-    const negatives = treasury.filter((row) => Number(row.spread) < 0).length;
-    const zeros = treasury.filter((row) => row.spread === 0 || /平/.test(row.summaryMeta?.displaySpreadText || "")).length;
-    const positives = treasury.length - negatives - zeros;
-    const patterns = [negatives ? "低于二级" : "", zeros ? "与二级持平" : "", positives ? "小幅高于二级或远期" : ""].filter(Boolean);
-    const opening = `本周国债发行结果${patterns.join("、")}，各期限品种差异化表现。`;
-    const details = treasury.map((row) => `${tenor(row.tenor)}国债本次${resultPhrase(row)}`).join("；") + "。";
+  const treasuryChanges = treasury.map((row) => {
+    const previous = comparablePrevious(row);
+    const previousSpread = previous?.spread;
+    const currentSpread = row.spread;
+    if (previousSpread === null || previousSpread === undefined || currentSpread === null || currentSpread === undefined) return null;
+    return { row, previous, previousSpread, currentSpread, change: currentSpread - previousSpread, movement: direction(previousSpread, currentSpread) };
+  }).filter((item): item is NonNullable<typeof item> => Boolean(item));
+  if (treasuryChanges.length) {
+    const opening = `本周可比国债发行利差中，${treasuryChanges.map(({ row, movement }) => `${tenor(row.tenor)}${isDiscountBond(row) ? "贴现国债" : "国债"}${movement}`).join("，")}。`;
+    const details = treasuryChanges.map(({ row, previous, previousSpread, currentSpread, change, movement }) => {
+      const comparator = previous.comparisonType === "discount_comparator"
+        ? `对比同期限贴现国债${previous.code}（${previous.date}）`
+        : `上次发行${previous.code}（${previous.date}）`;
+      return `${tenor(row.tenor)}${isDiscountBond(row) ? "贴现国债" : "国债"}本次${resultPhrase(row, row.summaryMeta?.displaySpreadText, currentSpread)}，${comparator}${resultPhrase(row, previous.displaySpreadText, previousSpread)}，${movement}${Math.abs(change).toFixed(2)}BP。`;
+    }).join("\n");
     sections.push(`国债\n${opening}\n${details}`);
   }
 
   const policy = supported.filter((row) => row.bondType !== "国债" && !/DR浮息债/i.test(row.summaryMeta?.rateType || row.remark || ""));
   const routeSections = ["中债招标", "上清所", "报价发行"].map((route) => {
     const material = policy.filter((row) => (row.summaryMeta?.route || row.issuanceRoute || "中债招标") === route).map((row) => {
-      const previous = row.summaryMeta?.previous;
+      const previous = comparablePrevious(row);
       const previousSpread = previous?.spread;
       const currentSpread = row.spread;
       if (previousSpread === null || previousSpread === undefined || currentSpread === null || currentSpread === undefined) return null;
