@@ -81,6 +81,11 @@ function rewriteRow(row: Element, values: unknown[]) {
   const cells = directElements(row, "tc");
   cells.forEach((cell, index) => rewriteCell(cell, values[index] ?? ""));
 }
+function removeFixedRowHeight(row: Element) {
+  const properties = directElements(row, "trPr")[0];
+  if (!properties) return;
+  directElements(properties, "trHeight").forEach((height) => properties.removeChild(height));
+}
 function localNature(row: ParsedBondRecord) {
   const nature = text(row.raw?.["性质"], "");
   const kind = text(row.raw?.["类型"], "");
@@ -176,6 +181,8 @@ function rewriteDailyTable(table: Element, rows: ParsedBondRecord[]) {
   if (!sample) return;
   reviewValues(rows).forEach((values) => {
     const row = sample.cloneNode(true) as Element;
+    // 母版的示例行保留了较大的固定行高；按实际内容自动伸缩，避免少量发行时出现大片留白。
+    removeFixedRowHeight(row);
     rewriteRow(row, values);
     table.appendChild(row);
   });
