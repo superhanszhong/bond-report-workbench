@@ -111,16 +111,6 @@ function removeParagraphFlag(paragraph: Element, localName: string) {
   if (!properties) return;
   directElements(properties, localName).forEach((node) => properties.removeChild(node));
 }
-function insertPageBreakBefore(body: Element, paragraph: Element) {
-  const document = body.ownerDocument!;
-  const breaker = document.createElementNS(W, "w:p");
-  const run = document.createElementNS(W, "w:r");
-  const br = document.createElementNS(W, "w:br");
-  br.setAttributeNS(W, "w:type", "page");
-  run.appendChild(br);
-  breaker.appendChild(run);
-  body.insertBefore(breaker, paragraph);
-}
 function resetParagraphIndent(paragraph: Element) {
   const properties = ensureChild(paragraph, "pPr", true);
   const indent = ensureChild(properties, "ind");
@@ -132,6 +122,18 @@ function resetParagraphIndent(paragraph: Element) {
 function setRowCantSplit(row: Element) {
   const properties = ensureChild(row, "trPr", true);
   ensureChild(properties, "cantSplit");
+}
+function keepTableTogether(table: Element) {
+  const rows = directElements(table, "tr");
+  rows.forEach((row, rowIndex) => {
+    setRowCantSplit(row);
+    const properties = ensureChild(row, "trPr", true);
+    if (rowIndex === 0) ensureChild(properties, "tblHeader");
+    if (rowIndex === rows.length - 1) return;
+    directElements(row, "tc").forEach((cell) => {
+      directElements(cell, "p").forEach((paragraph) => setParagraphFlag(paragraph, "keepNext"));
+    });
+  });
 }
 function localNature(row: ParsedBondRecord) {
   const nature = text(row.raw?.["性质"], "");
@@ -326,19 +328,26 @@ export async function buildWeeklyReportBlob({
 
   const headingParagraphs = [8, 13, 18, 22, 26];
   const leadParagraphs = [9, 14, 19, 23, 27];
+  const dailyPageUnitBudget = 21;
+  let dailyPageUnits = 0;
   dates.forEach((date, index) => {
     const rows = dailyRate[index];
     rewriteParagraph(paragraphs[headingParagraphs[index]], `${formatMd(date)} 回顾（${weekday(date)}）`);
     rewriteParagraph(paragraphs[leadParagraphs[index]], dailyLead(rows));
     rewriteDailyTable(tables[index + 2], rows);
-    // 每日回顾独立起页，标题、导语与表格保持为一个客户可读的完整块。
+    // 每日回顾连续排版；仅在剩余空间不足时让标题、导语和整张表自然移至下一页。
     resetParagraphIndent(paragraphs[headingParagraphs[index]]);
     resetParagraphIndent(paragraphs[leadParagraphs[index]]);
     removeParagraphFlag(paragraphs[headingParagraphs[index]], "pageBreakBefore");
-    insertPageBreakBefore(body, paragraphs[headingParagraphs[index]]);
+    const blockUnits = rows.length + 2;
+    if (dailyPageUnits > 0 && dailyPageUnits + blockUnits > dailyPageUnitBudget) {
+      setParagraphFlag(paragraphs[headingParagraphs[index]], "pageBreakBefore");
+      dailyPageUnits = 0;
+    }
+    dailyPageUnits += blockUnits;
     setParagraphFlag(paragraphs[headingParagraphs[index]], "keepNext");
     setParagraphFlag(paragraphs[leadParagraphs[index]], "keepNext");
-    directElements(tables[index + 2], "tr").forEach(setRowCantSplit);
+    keepTableTogether(tables[index + 2]);
   });
 
   zip.file("word/document.xml", new XMLSerializer().serializeToString(document), { createFolders: false });
