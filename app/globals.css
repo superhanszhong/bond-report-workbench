@@ -56,28 +56,34 @@ button { color: inherit; }
 .notice-error { border-color: #efd1cb; background: #fff7f5; color: var(--danger); }
 .notice button { margin-left: auto; border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; }
 
-.hero-grid { display: block; }
-.upload-card, .panel, .report-panel { border: 1px solid var(--line); background: var(--panel); border-radius: 14px; box-shadow: 0 11px 35px rgba(73,60,52,.035); }
+.hero-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+.upload-card, .report-source-card, .panel, .report-panel { border: 1px solid var(--line); background: var(--panel); border-radius: 14px; box-shadow: 0 11px 35px rgba(73,60,52,.035); }
 
 .upload-card { min-height: 255px; padding: 25px; background: linear-gradient(145deg,#fff 46%,#fdf2e9); }
+.report-source-card { min-height: 255px; padding: 25px; background: linear-gradient(145deg,#fff 46%,#f7f3f0); }
+.report-source-card .card-head p { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .card-head, .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .card-head h2, .panel-head h2, .report-panel h2 { margin: 0; font-size: 19px; font-weight: 700; }
 .card-head > svg { color: #8a9295; width: 21px; }
-.upload-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
+.upload-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
 .upload-lane { min-width: 0; display: grid; gap: 8px; }
 .upload-actions button { width: 100%; min-height: 126px; padding: 17px; display: flex; align-items: center; gap: 15px; border: 1px dashed #e8b792; border-radius: 12px; background: var(--gold-soft); cursor: pointer; text-align: left; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease, background .15s ease; }
 .upload-actions .rate-drop { border-color: #a9ced7; background: #eef8fa; }
 .upload-actions .maturity-drop { border-color: #d8c7bc; background: #f7f3f0; }
+.upload-actions .plan-drop { border-color: #e7c9b5; background: #fff5ed; }
 .upload-actions button:hover, .upload-actions button.drag-active { transform: translateY(-2px); border-style: solid; border-color: var(--orange); box-shadow: 0 9px 24px rgba(142,103,49,.1); }
 .upload-actions .rate-drop:hover, .upload-actions .rate-drop.drag-active { border-color: #75aebb; background: var(--sky); box-shadow: 0 9px 24px rgba(77,128,140,.1); }
 .upload-actions .maturity-drop:hover, .upload-actions .maturity-drop.drag-active { border-color: #c69475; background: #fae9dc; box-shadow: 0 9px 24px rgba(145,103,78,.09); }
+.upload-actions .plan-drop:hover, .upload-actions .plan-drop.drag-active { border-color: #e2a170; background: #fce8d8; box-shadow: 0 9px 24px rgba(145,103,78,.09); }
 .upload-actions button > svg { flex: 0 0 auto; width: 27px; color: var(--orange-deep); }
 .upload-actions .rate-drop > svg { color: var(--sky-deep); }
 .upload-actions .maturity-drop > svg { color: #9c765f; }
+.upload-actions .plan-drop > svg { color: #bf7c4e; }
 .upload-actions strong, .upload-actions small { display: block; }
 .upload-actions em { display: inline-block; margin-bottom: 7px; padding: 3px 7px; border-radius: 999px; background: rgba(229,160,111,.2); color: #935b38; font-size: 9px; font-style: normal; font-weight: 800; letter-spacing: .08em; }
 .upload-actions .rate-drop em { background: rgba(94,135,147,.12); color: #4f7781; }
 .upload-actions .maturity-drop em { background: rgba(164,117,88,.11); color: #7f604d; }
+.upload-actions .plan-drop em { background: rgba(229,160,111,.15); color: #8f5b39; }
 .upload-actions strong { font-size: 14px; }
 .upload-actions small { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.5; font-weight: 400; }
 .latest-date { min-height: 40px; padding: 9px 12px; display: flex; align-items: center; gap: 8px; border: 1px solid #efd5c0; border-radius: 9px; background: #fff7f0; color: #806f65; font-size: 11px; }
@@ -89,6 +95,9 @@ button { color: inherit; }
 .maturity-date { border-color: #e4d6cc; background: #faf7f5; }
 .maturity-date svg { color: #a77d63; }
 .maturity-date strong { color: #735748; }
+.plan-date { border-color: #efd7c5; background: #fff8f2; }
+.plan-date svg { color: #bd7d51; }
+.plan-date strong { color: #795239; }
 .upload-card > p { margin: 13px 0 0; color: #939291; font-size: 11px; }
 
 .overview-section { margin: 18px 0; padding: 22px 24px 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 11px 35px rgba(73,60,52,.035); }
@@ -174,6 +183,7 @@ button { color: inherit; }
   .sidebar nav button { justify-content: center; }
   .side-note { justify-content: center; }
   .workspace { padding-inline: 28px; }
+  .hero-grid { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: repeat(2,1fr); }
   .upload-actions { grid-template-columns: 1fr 1fr; }
   .upload-actions .upload-lane:last-child { grid-column: 1 / -1; }

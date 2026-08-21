@@ -6,8 +6,8 @@ import {
   Download, FileSpreadsheet, FileText, LoaderCircle, RefreshCw, Save, Upload, X,
 } from "lucide-react";
 import {
-  fridayOf, localPlanText, maturityWeekStart, mondayOf, parseLocalBondFile, parseMaturityFile,
-  parseSpreadFile, ParsedBondRecord, resolveSpreadBp, spreadSummary,
+  fridayOf, localPlanText, maturityWeekStart, mondayOf, parseIssuancePlanFile, parseLocalBondFile, parseMaturityFile,
+  parseSpreadFile, ParsedBondRecord, rateMaturityBreakdown, resolveSpreadBp, spreadSummary,
 } from "./lib/workbench";
 import { buildWeeklyReportBlob } from "./lib/report";
 
@@ -42,8 +42,8 @@ type WeekData = {
   draft?: { summary_text?: string; review_text?: string; updated_at?: string } | null;
 };
 
-type LatestDates = { local_bond?: string; spread?: string; maturity?: string };
-type DatasetType = "local_bond" | "spread" | "maturity";
+type LatestDates = { local_bond?: string; spread?: string; maturity?: string; issuance_plan?: string };
+type DatasetType = "local_bond" | "spread" | "maturity" | "issuance_plan";
 
 const SUMMARY_DRAFT_VERSION = "weekly-bond-summary-v2";
 
@@ -286,6 +286,7 @@ export default function Workbench() {
   const localInput = useRef<HTMLInputElement>(null);
   const spreadInput = useRef<HTMLInputElement>(null);
   const maturityInput = useRef<HTMLInputElement>(null);
+  const issuancePlanInput = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => () => {
@@ -296,6 +297,7 @@ export default function Workbench() {
   const localRecords = records.filter((_, i) => data.records[i]?.dataset_type === "local_bond");
   const spreadRecords = records.filter((_, i) => data.records[i]?.dataset_type === "spread");
   const maturityRecords = records.filter((_, i) => data.records[i]?.dataset_type === "maturity");
+  const issuancePlanRecords = records.filter((_, i) => data.records[i]?.dataset_type === "issuance_plan");
   const weekEnd = fridayOf(weekStart);
   const dailyDates = Array.from(new Set(localRecords.map((row) => row.tradeDate))).sort();
   const localAmount = localRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
@@ -303,6 +305,7 @@ export default function Workbench() {
   const latestLocalDate = latestDates.local_bond || "暂无数据";
   const latestSpreadDate = latestDates.spread || "暂无数据";
   const latestMaturityDate = latestDates.maturity || "暂无数据";
+  const latestIssuancePlanDate = latestDates.issuance_plan || "暂无数据";
   const rateMaturityRecords = maturityRecords.filter(row => maturityKind(row) === "rate");
   const localMaturityRecords = maturityRecords.filter(row => maturityKind(row) === "local");
   const maturityTotal = maturityRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
@@ -356,7 +359,8 @@ export default function Workbench() {
     setMessage(`正在解析 ${file.name}…`);
     try {
       const parsed = type === "local_bond" ? await parseLocalBondFile(file)
-        : type === "spread" ? await parseSpreadFile(file) : await parseMaturityFile(file);
+        : type === "spread" ? await parseSpreadFile(file)
+          : type === "maturity" ? await parseMaturityFile(file) : await parseIssuancePlanFile(file);
       if (type === "spread") setSpreadSourceRecords(parsed);
       const recordWeekOf = (row: ParsedBondRecord) => type === "maturity" ? maturityWeekStart(row.tradeDate) : mondayOf(row.tradeDate);
       const detectedWeeks = new Set(parsed.map(recordWeekOf));
@@ -490,18 +494,16 @@ export default function Workbench() {
         const iso = date.toISOString().slice(0, 10);
         return [iso, localMaturityRecords.filter(row => row.tradeDate === iso).reduce((sum, row) => sum + (row.amount || 0), 0)];
       }));
-      const rateLabels = new Map<string, number>();
-      rateMaturityRecords.forEach(row => rateLabels.set(row.bondType || "利率债", (rateLabels.get(row.bondType || "利率债") || 0) + (row.amount || 0)));
       const previousRateMaturity = previousMaturityRecords.filter(row => maturityKind(row) === "rate").reduce((sum, row) => sum + (row.amount || 0), 0);
       const previousRateIssuance = previousSpreadRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
       const maturity = maturityRecords.length ? {
         rateTotal,
-        rateBreakdown: [...rateLabels].map(([label, value]) => `${label}:${Number(value.toFixed(4))}亿`).join("　") || "-",
+        rateBreakdown: rateMaturityBreakdown(rateMaturityRecords),
         localDaily,
         localTotal: localMaturityRecords.reduce((sum, row) => sum + (row.amount || 0), 0),
         previousRateNet: previousMaturityRecords.length ? previousRateIssuance - previousRateMaturity : undefined,
       } : undefined;
-      const blob = await buildWeeklyReportBlob({ weekStart, summary, localRecords, spreadRecords, previousSpreadRecords, ytdLocalRecords, maturity });
+      const blob = await buildWeeklyReportBlob({ weekStart, summary, localRecords, spreadRecords, scheduleRecords: issuancePlanRecords, previousSpreadRecords, ytdLocalRecords, maturity });
       const url = URL.createObjectURL(blob);
       const fileName = `利率债发行周报${weekStart.replaceAll("-", "")}-${mmdd(weekEnd)}.docx`;
       setReportDownload({ url, name: fileName });
@@ -562,6 +564,25 @@ export default function Workbench() {
                 ><BarChart3/><span><em>利率债板块</em><strong>国债及政金债一二级表</strong><small>拖入或点击选择 Excel<br/>生成利差图与发行小结</small></span></button>
                 <div className="latest-date spread-date"><CalendarDays/><span>一二级利差最新日期</span><strong>{latestSpreadDate}</strong></div>
               </div>
+            </div>
+            <input ref={localInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"local_bond"); e.currentTarget.value=""; }}/>
+            <input ref={spreadInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"spread"); e.currentTarget.value=""; }}/>
+            <p>一二级表仅用于利差图、发行小结和每日招标结果；重复上传时只更新变化字段。</p>
+          </div>
+          <div className="report-source-card">
+            <div className="card-head"><div><span className="section-label">周报生成数据</span><h2>发行与到期明细</h2><p>用于生成周报中的上午/下午发行计划、发行总量、到期结构和净融资。</p></div><FileText/></div>
+            <div className="upload-actions report-upload-actions">
+              <div className="upload-lane">
+                <button
+                  className={`drop-zone plan-drop ${dragging === "issuance_plan" ? "drag-active" : ""}`}
+                  onClick={() => issuancePlanInput.current?.click()}
+                  onDragEnter={event => { event.preventDefault(); setDragging("issuance_plan"); }}
+                  onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
+                  onDragLeave={() => setDragging(null)}
+                  onDrop={event => dropFile(event, "issuance_plan")}
+                ><CalendarDays/><span><em>发行明细</em><strong>新债发行计划</strong><small>读取发行日期、招标时间和发行量<br/>自动区分上午/下午</small></span></button>
+                <div className="latest-date plan-date"><CalendarDays/><span>发行计划最新日期</span><strong>{latestIssuancePlanDate}</strong></div>
+              </div>
               <div className="upload-lane">
                 <button
                   className={`drop-zone maturity-drop ${dragging === "maturity" ? "drag-active" : ""}`}
@@ -570,14 +591,12 @@ export default function Workbench() {
                   onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
                   onDragLeave={() => setDragging(null)}
                   onDrop={event => dropFile(event, "maturity")}
-                ><CalendarDays/><span><em>周报数据</em><strong>本周到期明细</strong><small>拖入或点击选择 Excel<br/>自动区分地方债与国债政金债</small></span></button>
+                ><CalendarDays/><span><em>到期明细</em><strong>本周到期数据</strong><small>自动区分地方债与国债政金债<br/>细分贴现、附息和清发品种</small></span></button>
                 <div className="latest-date maturity-date"><CalendarDays/><span>到期数据最新日期</span><strong>{latestMaturityDate}</strong></div>
               </div>
             </div>
-            <input ref={localInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"local_bond"); e.currentTarget.value=""; }}/>
-            <input ref={spreadInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"spread"); e.currentTarget.value=""; }}/>
             <input ref={maturityInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"maturity"); e.currentTarget.value=""; }}/>
-            <p>将文件拖入对应色块即可上传；重复上传同一债券时，仅更新发生变化的字段。</p>
+            <input ref={issuancePlanInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"issuance_plan"); e.currentTarget.value=""; }}/>
           </div>
         </section>
 
@@ -629,13 +648,13 @@ export default function Workbench() {
         </section>}
 
         {(active === "overview" || active === "report") && <section className="report-panel">
-          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>直接使用今日 Word 原文件作为母版，自动填入发行、到期、净融资、每日回顾和表格数据。</p>{!maturityRecords.length && <p className="report-status report-status-error">生成前请先上传本周到期明细，否则到期及净融资项目无法完整填充。</p>}{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}{reportDownload && <a className="report-download" href={reportDownload.url} download={reportDownload.name}><Download/>下载已生成周报</a>}</div>
-          <button onClick={exportDocx} disabled={reportLoading || (!localRecords.length && !spreadRecords.length)}>{reportLoading ? <LoaderCircle className="spin"/> : <FileText/>}{reportLoading ? "生成中" : "生成 Word"}</button>
+          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>发行计划和总量以“新债发行计划”为准，到期结构取“本周到期明细”；一二级表只提供利差、小结和每日招标结果。</p>{!issuancePlanRecords.length && <p className="report-status report-status-error">请先在“周报生成数据”模块上传新债发行计划，系统才能准确区分上午和下午。</p>}{!maturityRecords.length && <p className="report-status report-status-error">请先上传本周到期明细，否则到期及净融资项目无法完整填充。</p>}{!spreadRecords.length && <p className="report-status report-status-error">请先上传一二级表，用于发行小结和每日招标结果。</p>}{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}{reportDownload && <a className="report-download" href={reportDownload.url} download={reportDownload.name}><Download/>下载已生成周报</a>}</div>
+          <button onClick={exportDocx} disabled={reportLoading || !issuancePlanRecords.length || !maturityRecords.length || !spreadRecords.length}>{reportLoading ? <LoaderCircle className="spin"/> : <FileText/>}{reportLoading ? "生成中" : "生成 Word"}</button>
         </section>}
 
         <section className="panel compact-panel">
           <div className="panel-head"><div><span className="section-label">SOURCE LOG</span><h2>本周文件</h2></div><button className="icon-button" onClick={loadWeek} aria-label="刷新"><RefreshCw/></button></div>
-          {loading ? <div className="loading"><LoaderCircle className="spin"/>读取中</div> : data.imports.length ? <div className="file-list">{data.imports.map(item => <div key={item.id}><FileSpreadsheet/><span><strong>{item.file_name}</strong><small>{item.dataset_type === "local_bond" ? "地方债发行" : item.dataset_type === "maturity" ? "到期明细" : "一二级"} · {item.record_count}条 · {item.trade_date}</small></span><button aria-label="删除批次" onClick={()=>deleteImport(item.id)}><X/></button></div>)}</div> : <Empty text="本周暂无入库文件" />}
+          {loading ? <div className="loading"><LoaderCircle className="spin"/>读取中</div> : data.imports.length ? <div className="file-list">{data.imports.map(item => <div key={item.id}><FileSpreadsheet/><span><strong>{item.file_name}</strong><small>{item.dataset_type === "local_bond" ? "地方债发行" : item.dataset_type === "maturity" ? "到期明细" : item.dataset_type === "issuance_plan" ? "新债发行计划" : "一二级"} · {item.record_count}条 · {item.trade_date}</small></span><button aria-label="删除批次" onClick={()=>deleteImport(item.id)}><X/></button></div>)}</div> : <Empty text="本周暂无入库文件" />}
         </section>
       </section>
     </main>

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import XLSX from "xlsx-js-style";
-import { parseMaturityFile, resolveSpreadBp } from "../app/lib/workbench.ts";
+import { parseIssuancePlanFile, parseMaturityFile, rateMaturityBreakdown, resolveSpreadBp } from "../app/lib/workbench.ts";
+import { planSession } from "../app/lib/report.ts";
 
 test("uses the supplied spread when it reconciles with all-in and secondary yields", () => {
   const result = resolveSpreadBp({
@@ -44,4 +45,30 @@ test("parses the supplied maturity workbook layout and classifies rate versus lo
   assert.equal(records[0].bondType, "国债");
   assert.equal(records[1].bondType, "地方债");
   assert.equal(records[1].amount, 2);
+});
+
+test("parses the new-bond workbook schedule and keeps only Treasury and policy-bank issues", async () => {
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ["债券简称", "债券代码", "发行期限", "计划发行量(亿)", "实际发行量(亿)", "招标时间", "招标标的", "发行起始日", "托管机构"],
+    ["26农发03(增发26)", "260403X26.IB", "3Y", 80, 80, "14:00-15:00", "价格招标", "2026/08/17", "中债登"],
+    ["26进出清发001(增发2)", "092603001Z02.IB", "1Y", 20, 20, "10:00-16:30", "报价发行", "2026/08/19", "上清所"],
+    ["26北京债47", "2671001.IB", "7Y", 7.3, 7.3, "09:30-10:10", "利率招标", "2026/08/17", "中债登"],
+  ]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "利率债");
+  const bytes = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+  const records = await parseIssuancePlanFile(new File([bytes], "新债发行.xlsx"));
+  assert.equal(records.length, 2);
+  assert.equal(records[0].bidTime, "14:00-15:00");
+  assert.equal(planSession(records[0]), "下午");
+  assert.equal(planSession(records[1]), "上午");
+});
+
+test("refines Treasury and policy-bank maturity categories", () => {
+  const text = rateMaturityBreakdown([
+    { tradeDate: "2026-08-20", bondType: "国债", shortName: "26贴现国债32", bondCode: "269932", amount: 300 },
+    { tradeDate: "2026-08-20", bondType: "国债", shortName: "23附息国债17", bondCode: "230017", amount: 3055.1 },
+    { tradeDate: "2026-08-21", bondType: "口行债", shortName: "26进出清发贴现02", bondCode: "092603002", amount: 80 },
+  ]);
+  assert.equal(text, "贴现国债:300亿　附息国债:3055.1亿　进出清发:80亿");
 });

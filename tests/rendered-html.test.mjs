@@ -23,6 +23,10 @@ test("server-renders the bond issuance workbench", async () => {
   assert.match(html, /一二级利差/);
   assert.match(html, /地方债最新发行日/);
   assert.match(html, /一二级利差最新日期/);
+  assert.match(html, /新债发行计划/);
+  assert.match(html, /自动区分上午\/下午/);
+  assert.match(html, /周报生成数据/);
+  assert.match(html, /发行与到期明细/);
   assert.match(html, /本周发行概览/);
   assert.doesNotMatch(html, /本周完成度/);
   assert.doesNotMatch(html, /progress-ring/);

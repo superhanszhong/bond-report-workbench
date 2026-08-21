@@ -8,6 +8,7 @@ type ReportInput = {
   summary: string;
   localRecords: ParsedBondRecord[];
   spreadRecords: ParsedBondRecord[];
+  scheduleRecords?: ParsedBondRecord[];
   previousSpreadRecords?: ParsedBondRecord[];
   ytdLocalRecords?: ParsedBondRecord[];
   templateBytes?: ArrayBuffer;
@@ -93,6 +94,45 @@ function removeFixedRowHeight(row: Element) {
   if (!properties) return;
   directElements(properties, "trHeight").forEach((height) => properties.removeChild(height));
 }
+function ensureChild(parent: Element, localName: string, first = false) {
+  const existing = directElements(parent, localName)[0];
+  if (existing) return existing;
+  const child = parent.ownerDocument!.createElementNS(W, `w:${localName}`);
+  if (first && parent.firstChild) parent.insertBefore(child, parent.firstChild);
+  else parent.appendChild(child);
+  return child;
+}
+function setParagraphFlag(paragraph: Element, localName: string) {
+  const properties = ensureChild(paragraph, "pPr", true);
+  ensureChild(properties, localName);
+}
+function removeParagraphFlag(paragraph: Element, localName: string) {
+  const properties = directElements(paragraph, "pPr")[0];
+  if (!properties) return;
+  directElements(properties, localName).forEach((node) => properties.removeChild(node));
+}
+function insertPageBreakBefore(body: Element, paragraph: Element) {
+  const document = body.ownerDocument!;
+  const breaker = document.createElementNS(W, "w:p");
+  const run = document.createElementNS(W, "w:r");
+  const br = document.createElementNS(W, "w:br");
+  br.setAttributeNS(W, "w:type", "page");
+  run.appendChild(br);
+  breaker.appendChild(run);
+  body.insertBefore(breaker, paragraph);
+}
+function resetParagraphIndent(paragraph: Element) {
+  const properties = ensureChild(paragraph, "pPr", true);
+  const indent = ensureChild(properties, "ind");
+  indent.setAttributeNS(W, "w:left", "0");
+  indent.setAttributeNS(W, "w:right", "0");
+  indent.setAttributeNS(W, "w:firstLine", "0");
+  indent.removeAttributeNS(W, "hanging");
+}
+function setRowCantSplit(row: Element) {
+  const properties = ensureChild(row, "trPr", true);
+  ensureChild(properties, "cantSplit");
+}
 function localNature(row: ParsedBondRecord) {
   const nature = text(row.raw?.["性质"], "");
   const kind = text(row.raw?.["类型"], "");
@@ -126,7 +166,17 @@ function planLabel(row: ParsedBondRecord) {
   const short = row.bondType === "国开债" ? "国开" : row.bondType === "口行债" ? "进出" : row.bondType === "农发债" ? "农发" : row.bondType || "利率债";
   return (row.summaryMeta?.route === "报价发行" || row.issuanceRoute === "报价发行") ? `${short}清发（报价）` : short;
 }
-function dailyPlan(rows: ParsedBondRecord[]) {
+export function planSession(row: ParsedBondRecord): "上午" | "下午" {
+  if (row.summaryMeta?.route === "报价发行" || row.issuanceRoute === "报价发行" || /清发|报价/.test(row.remark || "")) return "上午";
+  const hour = Number.parseInt((row.bidTime || "").match(/\d{1,2}/)?.[0] || "", 10);
+  if (Number.isFinite(hour)) return hour >= 12 ? "下午" : "上午";
+  const day = new Date(`${row.tradeDate}T12:00:00`).getDay();
+  if (row.bondType === "农发债") return "下午";
+  if (row.bondType === "国开债" && day === 4) return "下午";
+  return "上午";
+}
+function dailyPlan(rows: ParsedBondRecord[], session: "上午" | "下午") {
+  rows = rows.filter((row) => planSession(row) === session);
   if (!rows.length) return "-";
   const groups = new Map<string, string[]>();
   rows.forEach((row) => {
@@ -134,6 +184,13 @@ function dailyPlan(rows: ParsedBondRecord[]) {
     groups.set(label, [...(groups.get(label) || []), `${tenorLabel(row)}:${text(row.amount)}亿`]);
   });
   return [...groups].map(([label, items]) => `${label}\n${items.join("\n")}`).join("\n");
+}
+function basePlanCode(code = "") { return code.replace(/[XZ]\d*$/i, ""); }
+function issuancePlanRows(rows: ParsedBondRecord[], schedules: ParsedBondRecord[]) {
+  if (!schedules.length) return rows;
+  const scheduleKeys = new Set(schedules.map((row) => `${row.tradeDate}|${basePlanCode(row.bondCode)}`));
+  const unmatchedResults = rows.filter((row) => !scheduleKeys.has(`${row.tradeDate}|${basePlanCode(row.bondCode)}`));
+  return [...schedules, ...unmatchedResults];
 }
 function varietyTotals(rows: ParsedBondRecord[]) {
   const order = ["贴现国债", "农发", "国开", "进出", "超长特国", "附息国债"];
@@ -197,7 +254,7 @@ function rewriteDailyTable(table: Element, rows: ParsedBondRecord[]) {
 }
 
 export async function buildWeeklyReportBlob({
-  weekStart, localRecords, spreadRecords, previousSpreadRecords = [], ytdLocalRecords = localRecords, templateBytes, maturity,
+  weekStart, localRecords, spreadRecords, scheduleRecords = [], previousSpreadRecords = [], ytdLocalRecords = localRecords, templateBytes, maturity,
 }: ReportInput) {
   const source = templateBytes || await fetch(TEMPLATE_URL).then((response) => {
     if (!response.ok) throw new Error("周报母版读取失败");
@@ -251,19 +308,17 @@ export async function buildWeeklyReportBlob({
 
   const weeklyRows = directElements(tables[1], "tr");
   const dailyRate = dates.map((date) => spreadRecords.filter((row) => row.tradeDate === date));
+  const plannedRate = issuancePlanRows(spreadRecords, scheduleRecords);
+  const dailyPlannedRate = dates.map((date) => plannedRate.filter((row) => row.tradeDate === date));
   const dailyLocal = dates.map((date) => localRecords.filter((row) => row.tradeDate === date));
-  if (referenceWeek) {
-    rewriteCell(directElements(weeklyRows[1], "tc")[5], dailyPlan(dailyRate[4]));
-  } else {
-    rewriteRow(weeklyRows[1], ["发行安排", ...dailyRate.map(dailyPlan)]);
-    rewriteRow(weeklyRows[2], ["", "", "", "", "", ""]);
-  }
-  rewriteRow(weeklyRows[3], [`国债政金债合计\n${text(currentAmount)}亿`, ...dailyRate.map((rows) => text(amount(rows)))]);
-  rewriteRow(weeklyRows[4], ["本周合计", varietyTotals(spreadRecords)]);
+  rewriteRow(weeklyRows[1], ["上午", ...dailyPlannedRate.map((rows) => dailyPlan(rows, "上午"))]);
+  rewriteRow(weeklyRows[2], ["下午", ...dailyPlannedRate.map((rows) => dailyPlan(rows, "下午"))]);
+  rewriteRow(weeklyRows[3], [`国债政金债合计\n${text(amount(plannedRate))}亿`, ...dailyPlannedRate.map((rows) => text(amount(rows)))]);
+  rewriteRow(weeklyRows[4], ["本周合计", varietyTotals(plannedRate)]);
   rewriteRow(weeklyRows[5], [`地方债\n${text(localTotal)}亿`, ...dailyLocal.map((rows) => rows.length ? text(amount(rows)) : "-")]);
   if (maturity) {
     rewriteRow(weeklyRows[6], [`国债政金债到期合计（含周末）\n${text(maturity.rateTotal)}亿`, maturity.rateBreakdown]);
-    rewriteRow(weeklyRows[7], [`地方债到期（不含周末）\n${text(localMaturityTotal)}亿`, ...dates.map((date) => text(maturity.localDaily[date] || 0))]);
+    rewriteRow(weeklyRows[7], [`地方债到期（不含周末）\n${text(localMaturityTotal)}亿`, ...dates.map((date) => maturity.localDaily[date] ? text(maturity.localDaily[date]) : "-")]);
   } else if (!referenceWeek) {
     rewriteRow(weeklyRows[6], ["国债政金债到期合计（含周末）", "-"]);
     rewriteRow(weeklyRows[7], ["地方债到期（不含周末）", "-", "-", "-", "-", "-"]);
@@ -276,6 +331,14 @@ export async function buildWeeklyReportBlob({
     rewriteParagraph(paragraphs[headingParagraphs[index]], `${formatMd(date)} 回顾（${weekday(date)}）`);
     rewriteParagraph(paragraphs[leadParagraphs[index]], dailyLead(rows));
     rewriteDailyTable(tables[index + 2], rows);
+    // 每日回顾独立起页，标题、导语与表格保持为一个客户可读的完整块。
+    resetParagraphIndent(paragraphs[headingParagraphs[index]]);
+    resetParagraphIndent(paragraphs[leadParagraphs[index]]);
+    removeParagraphFlag(paragraphs[headingParagraphs[index]], "pageBreakBefore");
+    insertPageBreakBefore(body, paragraphs[headingParagraphs[index]]);
+    setParagraphFlag(paragraphs[headingParagraphs[index]], "keepNext");
+    setParagraphFlag(paragraphs[leadParagraphs[index]], "keepNext");
+    directElements(tables[index + 2], "tr").forEach(setRowCantSplit);
   });
 
   zip.file("word/document.xml", new XMLSerializer().serializeToString(document), { createFolders: false });

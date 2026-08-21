@@ -91,6 +91,18 @@ const MATURITY_ALIASES: Record<string, string[]> = {
   所属区域: ["所属区域", "区域名称", "地区"],
 };
 
+const ISSUANCE_PLAN_ALIASES: Record<string, string[]> = {
+  债券简称: ["债券简称", "简称"],
+  债券代码: ["债券代码", "代码"],
+  发行期限: ["发行期限", "期限"],
+  计划发行量: ["计划发行量(亿)", "计划发行量（亿）", "计划发行量"],
+  实际发行量: ["实际发行量(亿)", "实际发行量（亿）", "实际发行量"],
+  招标时间: ["招标时间", "发行时间"],
+  招标标的: ["招标标的"],
+  发行起始日: ["发行起始日", "招标日", "发行日期"],
+  托管机构: ["托管机构", "招标场所"],
+};
+
 const SPECIAL_SPREAD_PATTERN = /绿债|绿色|主题债|浮息债/;
 
 function clean(value: unknown) {
@@ -387,6 +399,68 @@ export async function parseMaturityFile(file: File) {
   if (!records.length) throw new Error("未识别到到期明细，请使用包含债券简称、债券代码、发行规模、实际到期日和发行人的 Excel");
   records.sort((a, b) => `${a.tradeDate}|${a.bondCode}`.localeCompare(`${b.tradeDate}|${b.bondCode}`));
   return records;
+}
+
+function rateIssuerFromShortName(shortName: string) {
+  if (/国债/.test(shortName)) return { issuer: "中华人民共和国财政部", bondType: "国债" };
+  if (/国开/.test(shortName)) return { issuer: "国家开发银行", bondType: "国开债" };
+  if (/进出/.test(shortName)) return { issuer: "中国进出口银行", bondType: "口行债" };
+  if (/农发/.test(shortName)) return { issuer: "中国农业发展银行", bondType: "农发债" };
+  return null;
+}
+
+export async function parseIssuancePlanFile(file: File) {
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+  const records: ParsedBondRecord[] = [];
+  workbook.SheetNames.forEach((sheetName) => {
+    const rows = boundedSheetRows(workbook.Sheets[sheetName]);
+    const { row: headerRow, index } = headerIndex(rows, ISSUANCE_PLAN_ALIASES);
+    const required = ["债券简称", "债券代码", "发行期限", "招标时间", "发行起始日"];
+    if (headerRow < 0 || required.some((name) => index[name] === undefined)) return;
+    for (let r = headerRow + 1; r < rows.length; r += 1) {
+      const raw = rowObject(rows[r], index);
+      const shortName = clean(raw.债券简称);
+      const issuer = rateIssuerFromShortName(shortName);
+      const date = excelDate(raw.发行起始日);
+      const bondCode = clean(raw.债券代码).replace(/\.IB$/i, "");
+      if (!issuer || !date || !bondCode) continue;
+      const route = /清发|报价/.test(`${shortName}${clean(raw.招标标的)}`) ? "报价发行" : "中债招标";
+      records.push({
+        tradeDate: isoDate(date), bondCode, shortName, issuer: issuer.issuer, bondType: issuer.bondType,
+        issuanceRoute: route, venue: shortVenue(raw.托管机构), bidTime: clean(raw.招标时间),
+        tenor: clean(raw.发行期限).replace(/Y$/i, ""),
+        amount: numberValue(raw.实际发行量) ?? numberValue(raw.计划发行量),
+        remark: /清发/.test(shortName) ? "前台报价发行" : "", raw,
+      });
+    }
+  });
+  if (!records.length) throw new Error("未识别到国债及政金债发行计划，请确认文件包含发行起始日、招标时间和债券代码");
+  records.sort((a, b) => `${a.tradeDate}|${a.bidTime}|${a.bondCode}`.localeCompare(`${b.tradeDate}|${b.bidTime}|${b.bondCode}`));
+  return records;
+}
+
+export function maturityCategory(row: ParsedBondRecord) {
+  const name = `${row.shortName || ""}${row.fullName || ""}`;
+  if (row.bondType === "国债") {
+    if (/贴现/.test(name) || /^269/.test(row.bondCode || "")) return "贴现国债";
+    if (/超长|特别国债/.test(name)) return "超长特国";
+    return "附息国债";
+  }
+  if (row.bondType === "国开债") return /贴现|清发/.test(name) ? "贴现国开" : "国开";
+  if (row.bondType === "口行债") return /贴现|清发/.test(name) ? "进出清发" : "进出";
+  if (row.bondType === "农发债") return /贴现|清发/.test(name) ? "农发清发" : "农发";
+  return row.bondType || "利率债";
+}
+
+export function rateMaturityBreakdown(rows: ParsedBondRecord[]) {
+  const order = ["贴现国债", "附息国债", "超长特国", "贴现国开", "国开", "进出清发", "进出", "农发清发", "农发"];
+  const totals = new Map<string, number>();
+  rows.forEach((row) => {
+    const label = maturityCategory(row);
+    totals.set(label, (totals.get(label) || 0) + (row.amount || 0));
+  });
+  return order.filter((label) => totals.has(label))
+    .map((label) => `${label}:${Number((totals.get(label) || 0).toFixed(4))}亿`).join("　") || "-";
 }
 
 export async function parseSpreadFile(file: File) {
