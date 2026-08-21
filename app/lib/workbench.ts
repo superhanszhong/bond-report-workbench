@@ -564,7 +564,7 @@ export function localPlanText(records: ParsedBondRecord[], date: string) {
   return lines.join("\n");
 }
 
-export function spreadSummary(records: ParsedBondRecord[]) {
+export function spreadSummary(records: ParsedBondRecord[], history: ParsedBondRecord[] = []) {
   const supported = records.filter((row) => ["国债", "国开债", "口行债", "农发债"].includes(row.bondType || ""));
   if (!supported.length) return "本周暂无符合口径的国债及政金债发行记录。";
 
@@ -591,9 +591,49 @@ export function spreadSummary(records: ParsedBondRecord[]) {
     if (previous <= 0 && current > 0) return "由负转正";
     return current === 0 ? "收窄至持平" : "由持平转为利差";
   };
+  const allCandidates = [...history, ...supported];
   const comparablePrevious = (row: ParsedBondRecord) => {
-    const previous = row.summaryMeta?.previous;
-    return previous && (isDiscountBond(row) || isReopenedBond(row)) ? previous : undefined;
+    if (!isDiscountBond(row) && !isReopenedBond(row)) return undefined;
+    const embedded = row.summaryMeta?.previous;
+    if (embedded && embedded.date < row.tradeDate) return embedded;
+    const candidates = allCandidates.filter((candidate) => {
+      if (candidate === row || candidate.tradeDate >= row.tradeDate || candidate.spread === null || candidate.spread === undefined) return false;
+      if (isDiscountBond(row)) return isDiscountBond(candidate) && discountComparatorKey(candidate) === discountComparatorKey(row);
+      return baseBondCode(candidate.bondCode || "") === baseBondCode(row.bondCode || "");
+    }).sort((a, b) => b.tradeDate.localeCompare(a.tradeDate));
+    const previous = candidates[0];
+    if (!previous) return undefined;
+    return {
+      date: previous.tradeDate,
+      code: previous.bondCode || "",
+      comparisonType: isDiscountBond(row) ? "discount_comparator" as const : "same_bond" as const,
+      displaySpreadText: previous.summaryMeta?.displaySpreadText || "",
+      auctionSpreadText: previous.summaryMeta?.auctionSpreadText || "",
+      allInText: previous.summaryMeta?.allInText || "",
+      secondaryText: previous.summaryMeta?.secondaryText || "",
+      note: previous.remark || "",
+      spread: previous.spread ?? null,
+    };
+  };
+  const comparableRows = (rows: ParsedBondRecord[]) => rows.filter((row) =>
+    (isDiscountBond(row) || isReopenedBond(row)) && row.spread !== null && row.spread !== undefined);
+  const weekStart = mondayOf([...supported].sort((a, b) => a.tradeDate.localeCompare(b.tradeDate))[0].tradeDate);
+  const previousWeekDate = new Date(`${weekStart}T12:00:00`);
+  previousWeekDate.setDate(previousWeekDate.getDate() - 7);
+  const previousWeekStart = isoDate(previousWeekDate);
+  previousWeekDate.setDate(previousWeekDate.getDate() + 4);
+  const previousWeekEnd = isoDate(previousWeekDate);
+  const previousWeek = history.filter((row) => row.tradeDate >= previousWeekStart && row.tradeDate <= previousWeekEnd);
+  const average = (rows: ParsedBondRecord[]) => rows.reduce((sum, row) => sum + (row.spread || 0), 0) / rows.length;
+  const weeklyLead = (currentRows: ParsedBondRecord[], priorRows: ParsedBondRecord[], label: string) => {
+    const current = comparableRows(currentRows);
+    const prior = comparableRows(priorRows);
+    if (!current.length) return "";
+    const currentAverage = average(current);
+    if (!prior.length) return `按续发及贴现可比券口径，本周${label}平均一二级利差为${currentAverage >= 0 ? "+" : ""}${currentAverage.toFixed(2)}BP，上周暂无可比发行记录。`;
+    const priorAverage = average(prior);
+    const change = currentAverage - priorAverage;
+    return `按续发及贴现可比券口径，本周${label}平均一二级利差为${currentAverage >= 0 ? "+" : ""}${currentAverage.toFixed(2)}BP，上周为${priorAverage >= 0 ? "+" : ""}${priorAverage.toFixed(2)}BP，整体${direction(priorAverage, currentAverage)}${Math.abs(change).toFixed(2)}BP。`;
   };
   const sections: string[] = [];
   const maturityOrder = (value = "") => {
@@ -613,14 +653,15 @@ export function spreadSummary(records: ParsedBondRecord[]) {
     return { row, previous, previousSpread, currentSpread, change: currentSpread - previousSpread, movement: direction(previousSpread, currentSpread) };
   }).filter((item): item is NonNullable<typeof item> => Boolean(item));
   if (treasuryChanges.length) {
-    const opening = `本周可比国债发行利差中，${treasuryChanges.map(({ row, movement }) => `${tenor(row.tenor)}${isDiscountBond(row) ? "贴现国债" : "国债"}${movement}`).join("，")}。`;
+    const weekOverview = weeklyLead(treasury, previousWeek.filter((row) => row.bondType === "国债"), "国债");
+    const opening = `分期限看，${treasuryChanges.map(({ row, movement }) => `${tenor(row.tenor)}${isDiscountBond(row) ? "贴现国债" : "国债"}${movement}`).join("，")}。`;
     const details = treasuryChanges.map(({ row, previous, previousSpread, currentSpread, change, movement }) => {
       const comparator = previous.comparisonType === "discount_comparator"
         ? `对比同期限贴现国债${previous.code}（${previous.date}）`
         : `上次发行${previous.code}（${previous.date}）`;
       return `${tenor(row.tenor)}${isDiscountBond(row) ? "贴现国债" : "国债"}本次${resultPhrase(row, row.summaryMeta?.displaySpreadText, currentSpread)}，${comparator}${resultPhrase(row, previous.displaySpreadText, previousSpread)}，${movement}${Math.abs(change).toFixed(2)}BP。`;
     }).join("\n");
-    sections.push(`国债\n${opening}\n${details}`);
+    sections.push(`国债\n${[weekOverview, opening, details].filter(Boolean).join("\n")}`);
   }
 
   const policy = supported.filter((row) => row.bondType !== "国债" && !/DR浮息债/i.test(row.summaryMeta?.rateType || row.remark || ""));
@@ -634,12 +675,16 @@ export function spreadSummary(records: ParsedBondRecord[]) {
       if (Math.abs(change) <= 1) return null;
       return { row, previous, previousSpread, currentSpread, change, movement: direction(previousSpread, currentSpread) };
     }).filter((item): item is NonNullable<typeof item> => Boolean(item));
-    if (!material.length) return "";
-    const lead = material.map(({ row, movement }) => `${row.bondType}${tenor(row.tenor)}品种${movement}`).join("，") + "。";
-    const details = material.map(({ row, previous, previousSpread, currentSpread, change, movement }) =>
-      `${row.bondType}${tenor(row.tenor)}品种本次${resultPhrase(row, row.summaryMeta?.displaySpreadText, currentSpread)}，上次${resultPhrase(row, previous.displaySpreadText, previousSpread)}，${movement}${Math.abs(change).toFixed(2)}BP。`
-    ).join("\n");
-    return `${route}\n${lead}\n${details}`;
+    const routeRows = policy.filter((row) => (row.summaryMeta?.route || row.issuanceRoute || "中债招标") === route);
+    const priorRouteRows = previousWeek.filter((row) => row.bondType !== "国债" && (row.summaryMeta?.route || row.issuanceRoute || "中债招标") === route);
+    const weekOverview = weeklyLead(routeRows, priorRouteRows, `${route}政金债`);
+    if (!material.length && !weekOverview) return "";
+    const lead = material.length ? material.map(({ row, movement }) => `${row.bondType}${tenor(row.tenor)}品种${movement}`).join("，") + "。" : "";
+    const details = material.map(({ row, previous, previousSpread, currentSpread, change, movement }) => {
+      const comparator = previous.comparisonType === "discount_comparator" ? `对比同期限${row.bondType}${previous.code}（${previous.date}）` : "上次发行";
+      return `${row.bondType}${tenor(row.tenor)}品种本次${resultPhrase(row, row.summaryMeta?.displaySpreadText, currentSpread)}，${comparator}${resultPhrase(row, previous.displaySpreadText, previousSpread)}，${movement}${Math.abs(change).toFixed(2)}BP。`;
+    }).join("\n");
+    return `${route}\n${[weekOverview, lead, details].filter(Boolean).join("\n")}`;
   }).filter(Boolean);
   if (routeSections.length) sections.push(`政金债\n${routeSections.join("\n\n")}`);
 

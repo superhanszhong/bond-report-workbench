@@ -25,3 +25,20 @@ test("compares a discount bond with the prior compatible discount bond", () => {
   assert.match(text, /对比同期限贴现国债269940/);
   assert.match(text, /负利差走扩/);
 });
+
+test("finds the prior same-bond issuance from separately loaded history", () => {
+  const current = { tradeDate: "2026-08-14", bondCode: "2600006X2", bondType: "国债", tenor: "30", spread: -0.6, summaryMeta: meta() };
+  const history = [{ tradeDate: "2026-07-14", bondCode: "2600006X1", bondType: "国债", tenor: "30", spread: 0.2, summaryMeta: meta() }];
+  const text = spreadSummary([current], history);
+  assert.match(text, /上次发行2600006X1/);
+  assert.match(text, /由正转负0\.80BP/);
+});
+
+test("summarizes this week's comparable spread against last week's", () => {
+  const previous = { date: "2026-07-14", code: "2600006X1", comparisonType: "same_bond" as const, displaySpreadText: "较二级0.20BP", auctionSpreadText: "", allInText: "", secondaryText: "", note: "", spread: 0.2 };
+  const current = { tradeDate: "2026-08-14", bondCode: "2600006X2", bondType: "国债", tenor: "30", spread: -0.6, summaryMeta: meta(previous) };
+  const lastWeek = { tradeDate: "2026-08-07", bondCode: "2600005X1", bondType: "国债", tenor: "10", spread: 0.4, summaryMeta: { ...meta(), baseCode: "2600005" } };
+  const text = spreadSummary([current], [lastWeek]);
+  assert.match(text, /本周国债平均一二级利差为-0\.60BP，上周为\+0\.40BP/);
+  assert.match(text, /整体由正转负1\.00BP/);
+});
