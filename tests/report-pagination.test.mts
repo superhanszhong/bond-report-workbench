@@ -32,3 +32,25 @@ test("daily reviews flow continuously without forced page breaks", async () => {
   assert.match(xml, /<w:tblHeader\b/);
   assert.match(xml, /<w:keepNext\b/);
 });
+
+test("rate financing paragraph continues from the verified prior-week baseline", async () => {
+  const template = await readFile("public/templates/weekly-bond-report-template.docx");
+  const templateBytes = template.buffer.slice(template.byteOffset, template.byteOffset + template.byteLength) as ArrayBuffer;
+  const spreadRecords: ParsedBondRecord[] = [{
+    tradeDate: "2026-08-17", bondCode: "260017", bondType: "国债", tenor: "10", amount: 100,
+  }];
+  const blob = await buildWeeklyReportBlob({
+    weekStart: "2026-08-17", summary: "", localRecords: [], spreadRecords, templateBytes,
+    maturity: {
+      rateTotal: 200,
+      rateBreakdown: "国债:200亿",
+      localDaily: {},
+      // 即使旧入库明细计算出了不一致值，也优先使用已核定的 8/10–8/14 口径。
+      previousRateNet: -1638,
+    },
+  });
+  const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+  const xml = await zip.file("word/document.xml")!.async("string");
+
+  assert.match(xml, /本周国债政金债偿还200亿（不包含凭证式国债）；净融资-100亿，净融资较上周增加（上周净融资额-1643亿）。/);
+});

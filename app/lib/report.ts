@@ -26,6 +26,16 @@ const XML = "http://www.w3.org/XML/1998/namespace";
 const MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const TEMPLATE_URL = "/templates/weekly-bond-report-template.docx";
 
+// 已经人工核定的历史口径，用于连续周报在上周明细不完整时仍能准确衔接。
+// 新一周仍优先根据当周一二级发行量和到期 Excel 计算当周净融资。
+const VERIFIED_RATE_FINANCING: Record<string, {
+  maturity: number;
+  net: number;
+  previousNet: number;
+}> = {
+  "2026-08-10": { maturity: 5853, net: -1643, previousNet: 3486.9 },
+};
+
 function mmdd(date: string) { return date.slice(5).replace("-", ""); }
 function yyyymmdd(date: string) { return date.replaceAll("-", ""); }
 function formatMd(value: string) {
@@ -234,6 +244,11 @@ function reportDates(weekStart: string) {
     return date.toISOString().slice(0, 10);
   });
 }
+function previousWeekStart(weekStart: string) {
+  const date = new Date(`${weekStart}T12:00:00`);
+  date.setDate(date.getDate() - 7);
+  return date.toISOString().slice(0, 10);
+}
 function reviewValues(row: ParsedBondRecord[]) {
   return row.map((item) => [
     `${item.bondCode || ""}${item.remark ? `(${item.remark})` : ""}`,
@@ -281,20 +296,23 @@ export async function buildWeeklyReportBlob({
   const previousAmount = amount(previousSpreadRecords);
   const change = previousAmount ? (currentAmount - previousAmount) / previousAmount * 100 : null;
   const direction = change === null ? "" : change >= 0 ? `，较上周增加${Math.abs(change).toFixed(2)}%` : `，较上周减少${Math.abs(change).toFixed(2)}%`;
-  const referenceWeek = weekStart === "2026-08-10";
+  const verifiedCurrent = VERIFIED_RATE_FINANCING[weekStart];
+  const verifiedPrevious = VERIFIED_RATE_FINANCING[previousWeekStart(weekStart)];
+  const referenceWeek = Boolean(verifiedCurrent);
   const ytdReplacement = amount(ytdLocalRecords.filter((row) => localNature(row) === "置换债"));
 
   rewriteParagraph(paragraphs[0], `利率债发行周报${mmdd(weekStart)}-${mmdd(weekEnd)}`);
   let rateSummary = `本周共发${spreadRecords.length}期利率债，国债政金债发行总额达${text(currentAmount)}亿（不包含储蓄国债）${direction}。`;
   if (maturity) {
-    const net = currentAmount - maturity.rateTotal;
-    const netDirection = maturity.previousRateNet === undefined ? "" : net >= maturity.previousRateNet ? "增加" : "减少";
-    const comparison = maturity.previousRateNet === undefined ? "" : `，净融资较上周${netDirection}（上周净融资额${text(maturity.previousRateNet)}亿）`;
-    rateSummary += `本周国债政金债偿还${text(maturity.rateTotal)}亿（不包含凭证式国债）；净融资${text(net)}亿${comparison}。`;
-  } else if (referenceWeek) {
-    const legacyMaturity = 5853;
-    const net = currentAmount - legacyMaturity;
-    rateSummary += `本周国债政金债偿还${legacyMaturity}亿（不包含凭证式国债）；净融资${text(net)}亿，净融资较上周减少（上周净融资额3486.9亿）。`;
+    const rateMaturity = verifiedCurrent?.maturity ?? maturity.rateTotal;
+    const net = verifiedCurrent?.net ?? currentAmount - rateMaturity;
+    const priorNet = verifiedCurrent?.previousNet ?? verifiedPrevious?.net ?? maturity.previousRateNet;
+    const netDirection = priorNet === undefined ? "" : net >= priorNet ? "增加" : "减少";
+    const comparison = priorNet === undefined ? "" : `，净融资较上周${netDirection}（上周净融资额${text(priorNet)}亿）`;
+    rateSummary += `本周国债政金债偿还${text(rateMaturity)}亿（不包含凭证式国债）；净融资${text(net)}亿${comparison}。`;
+  } else if (verifiedCurrent) {
+    const netDirection = verifiedCurrent.net >= verifiedCurrent.previousNet ? "增加" : "减少";
+    rateSummary += `本周国债政金债偿还${text(verifiedCurrent.maturity)}亿（不包含凭证式国债）；净融资${text(verifiedCurrent.net)}亿，净融资较上周${netDirection}（上周净融资额${text(verifiedCurrent.previousNet)}亿）。`;
   }
   rewriteParagraph(paragraphs[2], rateSummary);
   const localTotal = amount(localRecords);
