@@ -6,7 +6,7 @@ import {
   Download, FileSpreadsheet, FileText, House, LoaderCircle, RefreshCw, Save, Upload, X,
 } from "lucide-react";
 import {
-  fridayOf, maturityWeekStart, mondayOf, parseIssuancePlanFile, parseLocalBondFile, parseMaturityFile,
+  fridayOf, maturityDailyTotals, maturityKind, maturityWeekStart, mondayOf, parseIssuancePlanFile, parseLocalBondFile, parseMaturityFile,
   parseSpreadFile, ParsedBondRecord, rateMaturityBreakdown, resolveSpreadBp, spreadSummary,
 } from "./lib/workbench";
 import { buildWeeklyReportBlob } from "./lib/report";
@@ -140,12 +140,6 @@ function normalize(row: StoredRecord): ParsedBondRecord {
 
 function tone(type: string) {
   return type === "国债" ? "treasury" : type === "国开债" ? "cdb" : type === "口行债" ? "exim" : "adbc";
-}
-
-function maturityKind(row: ParsedBondRecord) {
-  const kind = row.raw?.__maturityKind;
-  if (kind === "rate" || kind === "local") return kind;
-  return ["国债", "国开债", "口行债", "农发债"].includes(row.bondType || "") ? "rate" : "local";
 }
 
 function spreadAuditStatus(row: ParsedBondRecord) {
@@ -320,7 +314,6 @@ export default function Workbench() {
   const issuancePlanRecords = records.filter((_, i) => data.records[i]?.dataset_type === "issuance_plan");
   const weekEnd = fridayOf(weekStart);
   const spreadAmount = spreadRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
-  const issuancePlanAmount = issuancePlanRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
   const latestSpreadDate = latestDates.spread || "暂无数据";
   const latestMaturityDate = latestDates.maturity || "暂无数据";
   const latestIssuancePlanDate = latestDates.issuance_plan || "暂无数据";
@@ -512,11 +505,7 @@ export default function Workbench() {
       const previousMaturityRecords = previousPayload.records.filter((row) => row.dataset_type === "maturity").map(normalize);
       const ytdLocalRecords = (ytdLocalPayload.records || []).map(normalize);
       const rateTotal = rateMaturityRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
-      const localDaily = Object.fromEntries(Array.from({ length: 5 }, (_, index) => {
-        const date = new Date(`${weekStart}T12:00:00`); date.setDate(date.getDate() + index);
-        const iso = date.toISOString().slice(0, 10);
-        return [iso, localMaturityRecords.filter(row => row.tradeDate === iso).reduce((sum, row) => sum + (row.amount || 0), 0)];
-      }));
+      const localDaily = maturityDailyTotals(localMaturityRecords, weekStart);
       const previousRateMaturity = previousMaturityRecords.filter(row => maturityKind(row) === "rate").reduce((sum, row) => sum + (row.amount || 0), 0);
       const previousRateIssuance = previousSpreadRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
       const maturity = maturityRecords.length ? {
@@ -584,10 +573,10 @@ export default function Workbench() {
               </div>
             </div>
             <input ref={spreadInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"spread"); e.currentTarget.value=""; }}/>
-            <p>地方债转换仅在本地完成；一二级表用于利差图、发行小结和每日招标结果。</p>
+            <p>地方债转换仅在本地完成；一二级表是国债政金债发行量、利差图、发行小结和每日招标结果的统一口径。</p>
           </div>
           <div className="report-source-card">
-            <div className="card-head"><div><span className="section-label">周报生成数据</span><h2>发行与到期明细</h2><p>用于生成周报中的上午/下午发行计划、发行总量、到期结构和净融资。</p></div><FileText/></div>
+            <div className="card-head"><div><span className="section-label">周报生成数据</span><h2>发行时段与到期明细</h2><p>发行Excel只补充上午/下午；到期Excel提供全部到期量、到期结构和净融资口径。</p></div><FileText/></div>
             <div className="upload-actions report-upload-actions">
               <div className="upload-lane">
                 <button
@@ -597,8 +586,8 @@ export default function Workbench() {
                   onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
                   onDragLeave={() => setDragging(null)}
                   onDrop={event => dropFile(event, "issuance_plan")}
-                ><CalendarDays/><span><em>发行明细</em><strong>新债发行计划</strong><small>读取发行日期、招标时间和发行量<br/>自动区分上午/下午</small></span></button>
-                <div className="latest-date plan-date"><CalendarDays/><span>发行计划最新日期</span><strong>{latestIssuancePlanDate}</strong></div>
+                ><CalendarDays/><span><em>发行时段补充</em><strong>新债发行计划</strong><small>只读取发行日期、债券代码和招标时间<br/>不采用文件中的发行量</small></span></button>
+                <div className="latest-date plan-date"><CalendarDays/><span>发行时段文件最新日期</span><strong>{latestIssuancePlanDate}</strong></div>
               </div>
               <div className="upload-lane">
                 <button
@@ -620,8 +609,8 @@ export default function Workbench() {
         {active === "overview" && <section className="overview-section">
           <div className="overview-heading"><span className="section-label">WEEKLY OVERVIEW</span><h2>本周发行与到期总览</h2></div>
           <div className="metrics">
-            <article><span>国债政金债发行计划</span><strong>{issuancePlanAmount.toFixed(2)}</strong><small>亿元 · {issuancePlanRecords.length}只</small></article>
-            <article><span>国债政金债实际发行</span><strong>{spreadAmount.toFixed(2)}</strong><small>亿元 · {spreadRecords.length}只</small></article>
+            <article><span>发行时段已补充</span><strong>{issuancePlanRecords.length}</strong><small>只 · 仅用于上午/下午</small></article>
+            <article><span>国债政金债发行量</span><strong>{spreadAmount.toFixed(2)}</strong><small>亿元 · 一二级表口径</small></article>
             <article><span>国债及政金债到期</span><strong>{rateMaturityRecords.reduce((sum,row)=>sum+(row.amount||0),0).toFixed(2)}</strong><small>亿元 · {rateMaturityRecords.length}条明细</small></article>
             <article><span>地方债到期</span><strong>{localMaturityRecords.reduce((sum,row)=>sum+(row.amount||0),0).toFixed(2)}</strong><small>亿元 · {localMaturityRecords.length}条明细</small></article>
           </div>
@@ -659,7 +648,7 @@ export default function Workbench() {
         </section>}
 
         {active === "report" && <section className="report-panel focus-panel">
-          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>发行计划和总量以“新债发行计划”为准，到期结构取“本周到期明细”；一二级表只提供利差、小结和每日招标结果。</p>{!issuancePlanRecords.length && <p className="report-status report-status-error">请先在“周报生成数据”模块上传新债发行计划，系统才能准确区分上午和下午。</p>}{!maturityRecords.length && <p className="report-status report-status-error">请先上传本周到期明细，否则到期及净融资项目无法完整填充。</p>}{!spreadRecords.length && <p className="report-status report-status-error">请先上传一二级表，用于发行小结和每日招标结果。</p>}{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}{reportDownload && <a className="report-download" href={reportDownload.url} download={reportDownload.name}><Download/>下载已生成周报</a>}</div>
+          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>发行量、债券明细及每日发行结果以一二级表为准；新债发行Excel只补充上午/下午；国债、政金债及地方债到期量均以到期Excel为准。</p>{!issuancePlanRecords.length && <p className="report-status report-status-error">请先在“周报生成数据”模块上传新债发行计划，系统才能准确区分上午和下午。</p>}{!maturityRecords.length && <p className="report-status report-status-error">请先上传本周到期明细，否则到期及净融资项目无法完整填充。</p>}{!spreadRecords.length && <p className="report-status report-status-error">请先上传一二级表，用于发行量、发行小结和每日招标结果。</p>}{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}{reportDownload && <a className="report-download" href={reportDownload.url} download={reportDownload.name}><Download/>下载已生成周报</a>}</div>
           <button onClick={exportDocx} disabled={reportLoading || !issuancePlanRecords.length || !maturityRecords.length || !spreadRecords.length}>{reportLoading ? <LoaderCircle className="spin"/> : <FileText/>}{reportLoading ? "生成中" : "生成 Word"}</button>
         </section>}
 

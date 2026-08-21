@@ -188,11 +188,13 @@ function dailyPlan(rows: ParsedBondRecord[], session: "上午" | "下午") {
   return [...groups].map(([label, items]) => `${label}\n${items.join("\n")}`).join("\n");
 }
 function basePlanCode(code = "") { return code.replace(/[XZ]\d*$/i, ""); }
-function issuancePlanRows(rows: ParsedBondRecord[], schedules: ParsedBondRecord[]) {
+export function mergeIssuanceSessions(rows: ParsedBondRecord[], schedules: ParsedBondRecord[]) {
   if (!schedules.length) return rows;
-  const scheduleKeys = new Set(schedules.map((row) => `${row.tradeDate}|${basePlanCode(row.bondCode)}`));
-  const unmatchedResults = rows.filter((row) => !scheduleKeys.has(`${row.tradeDate}|${basePlanCode(row.bondCode)}`));
-  return [...schedules, ...unmatchedResults];
+  const scheduleByKey = new Map(schedules.map((row) => [`${row.tradeDate}|${basePlanCode(row.bondCode)}`, row]));
+  return rows.map((row) => {
+    const schedule = scheduleByKey.get(`${row.tradeDate}|${basePlanCode(row.bondCode)}`);
+    return schedule?.bidTime ? { ...row, bidTime: schedule.bidTime } : row;
+  });
 }
 function varietyTotals(rows: ParsedBondRecord[]) {
   const order = ["贴现国债", "农发", "国开", "进出", "超长特国", "附息国债"];
@@ -310,7 +312,8 @@ export async function buildWeeklyReportBlob({
 
   const weeklyRows = directElements(tables[1], "tr");
   const dailyRate = dates.map((date) => spreadRecords.filter((row) => row.tradeDate === date));
-  const plannedRate = issuancePlanRows(spreadRecords, scheduleRecords);
+  // 一二级表是发行量与债券明细的唯一口径；发行计划表只补充上午/下午时段。
+  const plannedRate = mergeIssuanceSessions(spreadRecords, scheduleRecords);
   const dailyPlannedRate = dates.map((date) => plannedRate.filter((row) => row.tradeDate === date));
   const dailyLocal = dates.map((date) => localRecords.filter((row) => row.tradeDate === date));
   rewriteRow(weeklyRows[1], ["上午", ...dailyPlannedRate.map((rows) => dailyPlan(rows, "上午"))]);

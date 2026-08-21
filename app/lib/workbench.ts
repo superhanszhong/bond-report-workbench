@@ -401,6 +401,21 @@ export async function parseMaturityFile(file: File) {
   return records;
 }
 
+export function maturityKind(row: ParsedBondRecord) {
+  const kind = row.raw?.__maturityKind;
+  if (kind === "rate" || kind === "local") return kind;
+  return ["国债", "国开债", "口行债", "农发债"].includes(row.bondType || "") ? "rate" : "local";
+}
+
+export function maturityDailyTotals(rows: ParsedBondRecord[], weekStart: string) {
+  return Object.fromEntries(Array.from({ length: 5 }, (_, index) => {
+    const date = new Date(`${weekStart}T12:00:00`);
+    date.setDate(date.getDate() + index);
+    const iso = isoDate(date);
+    return [iso, rows.filter((row) => row.tradeDate === iso).reduce((sum, row) => sum + (row.amount || 0), 0)];
+  }));
+}
+
 function rateIssuerFromShortName(shortName: string) {
   if (/国债/.test(shortName)) return { issuer: "中华人民共和国财政部", bondType: "国债" };
   if (/国开/.test(shortName)) return { issuer: "国家开发银行", bondType: "国开债" };

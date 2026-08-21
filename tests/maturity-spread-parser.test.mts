@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import XLSX from "xlsx-js-style";
-import { parseIssuancePlanFile, parseMaturityFile, rateMaturityBreakdown, resolveSpreadBp } from "../app/lib/workbench.ts";
-import { planSession } from "../app/lib/report.ts";
+import { maturityDailyTotals, parseIssuancePlanFile, parseMaturityFile, rateMaturityBreakdown, resolveSpreadBp } from "../app/lib/workbench.ts";
+import { mergeIssuanceSessions, planSession } from "../app/lib/report.ts";
 
 test("uses the supplied spread when it reconciles with all-in and secondary yields", () => {
   const result = resolveSpreadBp({
@@ -62,6 +62,30 @@ test("parses the new-bond workbook schedule and keeps only Treasury and policy-b
   assert.equal(records[0].bidTime, "14:00-15:00");
   assert.equal(planSession(records[0]), "下午");
   assert.equal(planSession(records[1]), "上午");
+});
+
+test("uses the primary-secondary table for issuance amounts and the schedule only for session", () => {
+  const spread = [{ tradeDate: "2026-08-17", bondCode: "260403X26", bondType: "农发债", tenor: "3", amount: 80 }];
+  const schedules = [
+    { tradeDate: "2026-08-17", bondCode: "260403X26", bondType: "农发债", tenor: "3", amount: 999, bidTime: "14:00-15:00" },
+    { tradeDate: "2026-08-17", bondCode: "260999X1", bondType: "农发债", tenor: "5", amount: 500, bidTime: "10:00-11:00" },
+  ];
+  const merged = mergeIssuanceSessions(spread, schedules);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].amount, 80);
+  assert.equal(merged[0].bidTime, "14:00-15:00");
+  assert.equal(planSession(merged[0]), "下午");
+});
+
+test("aggregates local-bond maturities by the actual maturity date from the workbook", () => {
+  const totals = maturityDailyTotals([
+    { tradeDate: "2026-08-17", bondType: "地方债", amount: 10.25 },
+    { tradeDate: "2026-08-17", bondType: "地方债", amount: 2.75 },
+    { tradeDate: "2026-08-19", bondType: "地方债", amount: 6 },
+  ], "2026-08-17");
+  assert.equal(totals["2026-08-17"], 13);
+  assert.equal(totals["2026-08-18"], 0);
+  assert.equal(totals["2026-08-19"], 6);
 });
 
 test("refines Treasury and policy-bank maturity categories", () => {
