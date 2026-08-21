@@ -27,7 +27,7 @@ test("daily reviews flow continuously without forced page breaks", async () => {
   const xml = await zip.file("word/document.xml")!.async("string");
 
   assert.doesNotMatch(xml, /<w:br\b[^>]*w:type="page"/);
-  assert.equal((xml.match(/<w:pageBreakBefore\b/g) || []).length, 1);
+  assert.doesNotMatch(xml, /<w:pageBreakBefore\b/);
   assert.match(xml, /<w:cantSplit\b/);
   assert.match(xml, /<w:tblHeader\b/);
   assert.match(xml, /<w:keepNext\b/);

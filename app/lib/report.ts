@@ -328,8 +328,6 @@ export async function buildWeeklyReportBlob({
 
   const headingParagraphs = [8, 13, 18, 22, 26];
   const leadParagraphs = [9, 14, 19, 23, 27];
-  const dailyPageUnitBudget = 21;
-  let dailyPageUnits = 0;
   dates.forEach((date, index) => {
     const rows = dailyRate[index];
     rewriteParagraph(paragraphs[headingParagraphs[index]], `${formatMd(date)} 回顾（${weekday(date)}）`);
@@ -339,12 +337,6 @@ export async function buildWeeklyReportBlob({
     resetParagraphIndent(paragraphs[headingParagraphs[index]]);
     resetParagraphIndent(paragraphs[leadParagraphs[index]]);
     removeParagraphFlag(paragraphs[headingParagraphs[index]], "pageBreakBefore");
-    const blockUnits = rows.length + 2;
-    if (dailyPageUnits > 0 && dailyPageUnits + blockUnits > dailyPageUnitBudget) {
-      setParagraphFlag(paragraphs[headingParagraphs[index]], "pageBreakBefore");
-      dailyPageUnits = 0;
-    }
-    dailyPageUnits += blockUnits;
     setParagraphFlag(paragraphs[headingParagraphs[index]], "keepNext");
     setParagraphFlag(paragraphs[leadParagraphs[index]], "keepNext");
     keepTableTogether(tables[index + 2]);
