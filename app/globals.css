@@ -63,17 +63,21 @@ button { color: inherit; }
 .card-head, .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .card-head h2, .panel-head h2, .report-panel h2 { margin: 0; font-size: 19px; font-weight: 700; }
 .card-head > svg { color: #8a9295; width: 21px; }
-.upload-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 22px; }
+.upload-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
 .upload-lane { min-width: 0; display: grid; gap: 8px; }
 .upload-actions button { width: 100%; min-height: 126px; padding: 17px; display: flex; align-items: center; gap: 15px; border: 1px dashed #e8b792; border-radius: 12px; background: var(--gold-soft); cursor: pointer; text-align: left; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease, background .15s ease; }
 .upload-actions .rate-drop { border-color: #a9ced7; background: #eef8fa; }
+.upload-actions .maturity-drop { border-color: #d8c7bc; background: #f7f3f0; }
 .upload-actions button:hover, .upload-actions button.drag-active { transform: translateY(-2px); border-style: solid; border-color: var(--orange); box-shadow: 0 9px 24px rgba(142,103,49,.1); }
 .upload-actions .rate-drop:hover, .upload-actions .rate-drop.drag-active { border-color: #75aebb; background: var(--sky); box-shadow: 0 9px 24px rgba(77,128,140,.1); }
+.upload-actions .maturity-drop:hover, .upload-actions .maturity-drop.drag-active { border-color: #c69475; background: #fae9dc; box-shadow: 0 9px 24px rgba(145,103,78,.09); }
 .upload-actions button > svg { flex: 0 0 auto; width: 27px; color: var(--orange-deep); }
 .upload-actions .rate-drop > svg { color: var(--sky-deep); }
+.upload-actions .maturity-drop > svg { color: #9c765f; }
 .upload-actions strong, .upload-actions small { display: block; }
 .upload-actions em { display: inline-block; margin-bottom: 7px; padding: 3px 7px; border-radius: 999px; background: rgba(229,160,111,.2); color: #935b38; font-size: 9px; font-style: normal; font-weight: 800; letter-spacing: .08em; }
 .upload-actions .rate-drop em { background: rgba(94,135,147,.12); color: #4f7781; }
+.upload-actions .maturity-drop em { background: rgba(164,117,88,.11); color: #7f604d; }
 .upload-actions strong { font-size: 14px; }
 .upload-actions small { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.5; font-weight: 400; }
 .latest-date { min-height: 40px; padding: 9px 12px; display: flex; align-items: center; gap: 8px; border: 1px solid #efd5c0; border-radius: 9px; background: #fff7f0; color: #806f65; font-size: 11px; }
@@ -82,6 +86,9 @@ button { color: inherit; }
 .spread-date { border-color: #d4e7eb; background: #f4fafb; }
 .spread-date svg { color: var(--sky-deep); }
 .spread-date strong { color: #466d76; }
+.maturity-date { border-color: #e4d6cc; background: #faf7f5; }
+.maturity-date svg { color: #a77d63; }
+.maturity-date strong { color: #735748; }
 .upload-card > p { margin: 13px 0 0; color: #939291; font-size: 11px; }
 
 .overview-section { margin: 18px 0; padding: 22px 24px 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 11px 35px rgba(73,60,52,.035); }
@@ -119,6 +126,11 @@ button { color: inherit; }
 .range-generate:disabled { opacity: .55; cursor: wait; }
 .range-generate svg { width: 15px; }
 .range-toolbar p { margin: 0 0 9px auto; color: var(--muted); font-size: 10px; }
+.chart-audit { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; color: #73777a; font-size: 10px; }
+.chart-audit span { padding: 6px 9px; border: 1px solid #e4e2de; border-radius: 999px; background: #fff; }
+.chart-audit strong { color: #4c5f65; font-size: 11px; }
+.chart-audit .audit-warning { border-color: #efd2ca; background: #fff8f6; color: var(--danger); }
+.chart-audit .audit-warning strong { color: var(--danger); }
 .spread-chart { display: block; width: 100%; height: auto; aspect-ratio: 8/5; }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #8b8b8a; background: rgba(255,255,255,.86); font-size: 13px; }
 .summary-editor { width: 100%; min-height: 210px; margin-top: 19px; padding: 18px; resize: vertical; border: 1px solid var(--line); border-radius: 10px; outline: none; background: #fbfaf9; color: #323436; font-size: 14px; line-height: 1.8; }
@@ -143,6 +155,12 @@ button { color: inherit; }
 .file-list small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .file-list button { border: 0; background: transparent; color: #aaa5a1; cursor: pointer; }
 .file-list button svg { width: 16px; }
+.maturity-grid { margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.maturity-grid article { min-width: 0; padding: 16px 17px; border: 1px solid var(--line); border-radius: 10px; background: #fbfaf8; }
+.maturity-grid article:first-child { background: #f6fbfc; }
+.maturity-grid span, .maturity-grid small { display: block; color: var(--muted); font-size: 11px; }
+.maturity-grid strong { display: block; margin: 7px 0; font-family: Georgia, serif; font-size: 22px; }
+.maturity-grid small { line-height: 1.7; white-space: normal; }
 .empty, .loading { min-height: 130px; margin-top: 15px; display: grid; place-items: center; align-content: center; gap: 9px; border: 1px dashed #ddd8d4; border-radius: 10px; color: #989692; font-size: 12px; }
 .empty svg, .loading svg { width: 24px; color: #b2aeaa; }
 .spin { animation: spin .9s linear infinite; }
@@ -157,6 +175,8 @@ button { color: inherit; }
   .side-note { justify-content: center; }
   .workspace { padding-inline: 28px; }
   .metrics { grid-template-columns: repeat(2,1fr); }
+  .upload-actions { grid-template-columns: 1fr 1fr; }
+  .upload-actions .upload-lane:last-child { grid-column: 1 / -1; }
   .metrics article:nth-child(2) { border-right: 0; }
   .metrics article:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
 }
@@ -173,6 +193,7 @@ button { color: inherit; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .hero-grid { grid-template-columns: 1fr; }
   .upload-actions { grid-template-columns: 1fr; }
+  .upload-actions .upload-lane:last-child { grid-column: auto; }
   .metrics { grid-template-columns: 1fr 1fr; }
   .day-block { grid-template-columns: 1fr; gap: 9px; }
   .range-toolbar { align-items: stretch; flex-wrap: wrap; }
@@ -181,4 +202,5 @@ button { color: inherit; }
   .range-generate { flex: 1 1 100%; justify-content: center; }
   .range-toolbar p { flex: 1 1 100%; margin: 3px 0 0; }
   .report-panel { align-items: flex-start; flex-direction: column; }
+  .maturity-grid { grid-template-columns: 1fr; }
 }

@@ -46,6 +46,14 @@ export type SpreadSummaryMeta = {
   };
 };
 
+export type SpreadAudit = {
+  status: "provided" | "recalculated" | "derived_treasury" | "missing" | "excluded";
+  source: string;
+  provided: number | null;
+  derived: number | null;
+  reason: string;
+};
+
 const LOCAL_ALIASES: Record<string, string[]> = {
   招标日: ["招标日", "发行日", "发行日期"],
   招标时间: ["招标时间"],
@@ -72,6 +80,19 @@ const ISSUER_MAP: Record<string, string> = {
   中国农业发展银行: "农发债",
 };
 
+const MATURITY_ALIASES: Record<string, string[]> = {
+  发行状态: ["发行状态", "状态"],
+  债券简称: ["债券简称", "简称"],
+  债券代码: ["债券代码", "代码"],
+  发行规模: ["发行规模", "发行规模(亿元)", "发行量", "发行量(亿元)"],
+  期限: ["期限"],
+  实际到期日: ["实际到期日", "到期日", "兑付日"],
+  发行人: ["发行人"],
+  所属区域: ["所属区域", "区域名称", "地区"],
+};
+
+const SPECIAL_SPREAD_PATTERN = /绿债|绿色|主题债|浮息债/;
+
 function clean(value: unknown) {
   if (value === null || value === undefined || value === "" || value === "--") return "";
   return String(value).trim();
@@ -94,13 +115,62 @@ function basisPointValue(value: unknown): number | null {
   return match ? Number(match[1]) : null;
 }
 
+function percentYieldValue(value: unknown): number | null {
+  const text = clean(value);
+  if (!text || /净价|价格|元/.test(text)) return null;
+  const parsed = numberValue(value);
+  if (parsed === null) return null;
+  return Math.abs(parsed) < 0.2 ? parsed * 100 : parsed;
+}
+
+export function resolveSpreadBp(input: {
+  provided: unknown;
+  allIn: unknown;
+  secondary: unknown;
+  winningRate: unknown;
+  issuer: string;
+  remark: string;
+}): { spread: number | null; audit: SpreadAudit } {
+  const provided = basisPointValue(input.provided);
+  const allIn = percentYieldValue(input.allIn);
+  const secondary = percentYieldValue(input.secondary);
+  const winningRate = percentYieldValue(input.winningRate);
+  const derivedFromAllIn = allIn !== null && secondary !== null
+    ? Number(((allIn - secondary) * 100).toFixed(6)) : null;
+  const derivedTreasury = input.issuer === "中华人民共和国财政部" && winningRate !== null && secondary !== null
+    ? Number(((winningRate - secondary) * 100).toFixed(6)) : null;
+  const derived = derivedFromAllIn ?? derivedTreasury;
+
+  if (SPECIAL_SPREAD_PATTERN.test(input.remark)) {
+    return { spread: provided, audit: { status: "excluded", source: "备注筛选", provided, derived, reason: "绿债、主题债或浮息债不纳入普通利差图" } };
+  }
+  if (provided !== null && derivedFromAllIn !== null && Math.abs(provided - derivedFromAllIn) > 0.05) {
+    return { spread: derivedFromAllIn, audit: { status: "recalculated", source: "综收与二级复算", provided, derived: derivedFromAllIn, reason: "表内利差与收益率复算差异超过0.05BP，采用复算值" } };
+  }
+  if (provided !== null) {
+    return { spread: provided, audit: { status: "provided", source: "综收-二级列", provided, derived, reason: "使用表内利差并完成收益率交叉核对" } };
+  }
+  if (derivedTreasury !== null) {
+    return { spread: derivedTreasury, audit: { status: "derived_treasury", source: "国债中标利率与二级复算", provided, derived: derivedTreasury, reason: "国债综收利差为空，按无发行手续费口径使用中标利率减二级" } };
+  }
+  return { spread: null, audit: { status: "missing", source: "无可用利差", provided, derived, reason: "缺少可比收益率，未纳入散点图" } };
+}
+
 function excelDate(value: unknown): Date | null {
   if (value instanceof Date && !Number.isNaN(value.valueOf())) return value;
   if (typeof value === "number") {
+    const compact = String(Math.trunc(value));
+    if (/^(?:19|20)\d{6}$/.test(compact)) {
+      return new Date(Number(compact.slice(0, 4)), Number(compact.slice(4, 6)) - 1, Number(compact.slice(6, 8)));
+    }
     const parsed = XLSX.SSF.parse_date_code(value);
     if (parsed) return new Date(parsed.y, parsed.m - 1, parsed.d);
   }
-  const text = clean(value).slice(0, 10).replace(/[/.]/g, "-");
+  const source = clean(value);
+  if (/^(?:19|20)\d{6}$/.test(source)) {
+    return new Date(Number(source.slice(0, 4)), Number(source.slice(4, 6)) - 1, Number(source.slice(6, 8)));
+  }
+  const text = source.slice(0, 10).replace(/[/.]/g, "-");
   const parts = text.split("-").map(Number);
   if (parts.length === 3 && parts.every(Number.isFinite)) return new Date(parts[0], parts[1] - 1, parts[2]);
   return null;
@@ -125,6 +195,14 @@ export function fridayOf(weekStart: string) {
   const date = new Date(`${weekStart}T12:00:00`);
   date.setDate(date.getDate() + 4);
   return isoDate(date);
+}
+
+export function maturityWeekStart(value: string | Date) {
+  const date = typeof value === "string" ? new Date(`${value}T12:00:00`) : new Date(value);
+  const day = date.getDay();
+  if (day === 6) date.setDate(date.getDate() - 5);
+  if (day === 0) date.setDate(date.getDate() - 6);
+  return mondayOf(date);
 }
 
 function actualSheetRange(sheet: XLSX.WorkSheet) {
@@ -282,6 +360,35 @@ export async function parseLocalBondFile(file: File) {
   return records;
 }
 
+export async function parseMaturityFile(file: File) {
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+  const records: ParsedBondRecord[] = [];
+  workbook.SheetNames.forEach((sheetName) => {
+    const rows = boundedSheetRows(workbook.Sheets[sheetName]);
+    const { row: headerRow, index } = headerIndex(rows, MATURITY_ALIASES);
+    const required = ["债券简称", "债券代码", "发行规模", "实际到期日", "发行人"];
+    if (headerRow < 0 || required.some((name) => index[name] === undefined)) return;
+    for (let r = headerRow + 1; r < rows.length; r += 1) {
+      const raw = rowObject(rows[r], index);
+      const date = excelDate(raw.实际到期日);
+      const bondCode = clean(raw.债券代码).replace(/\.(?:IB|SH|SZ)$/i, "");
+      const amount = numberValue(raw.发行规模);
+      const issuer = clean(raw.发行人);
+      if (!date || !bondCode || amount === null) continue;
+      const rateType = ISSUER_MAP[issuer];
+      records.push({
+        tradeDate: isoDate(date), bondCode, shortName: clean(raw.债券简称), issuer,
+        region: clean(raw.所属区域), bondType: rateType || "地方债",
+        tenor: clean(raw.期限), amount, remark: clean(raw.发行状态),
+        raw: { ...raw, __maturityKind: rateType ? "rate" : "local" },
+      });
+    }
+  });
+  if (!records.length) throw new Error("未识别到到期明细，请使用包含债券简称、债券代码、发行规模、实际到期日和发行人的 Excel");
+  records.sort((a, b) => `${a.tradeDate}|${a.bondCode}`.localeCompare(`${b.tradeDate}|${b.bondCode}`));
+  return records;
+}
+
 export async function parseSpreadFile(file: File) {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
   const aliases = {
@@ -314,17 +421,24 @@ export async function parseSpreadFile(file: File) {
       const issuer = clean(raw.发行人);
       const remark = clean(raw.备注);
       const route = routeFromRemark(remark, bondCode);
+      const resolvedSpread = resolveSpreadBp({
+        provided: raw.利差, allIn: raw.综收, secondary: raw.二级,
+        winningRate: raw.中标利率, issuer, remark,
+      });
       const meta: SpreadSummaryMeta = {
         baseCode: baseBondCode(bondCode), route, rateType: rateTypeFromRemark(remark),
         displaySpreadText: clean(display.利差), auctionSpreadText: clean(display.招标利差),
         allInText: clean(display.综收), secondaryText: clean(display.二级),
         winningRateText: clean(display.中标利率), note: remark, proceeds: clean(display.募集用途),
       };
-      const fullRaw = { ...raw, __display: display, __summaryMeta: meta };
+      if (!meta.displaySpreadText && resolvedSpread.spread !== null) {
+        meta.displaySpreadText = `${resolvedSpread.spread > 0 ? "+" : ""}${resolvedSpread.spread.toFixed(2)}（复算）`;
+      }
+      const fullRaw = { ...raw, __display: display, __summaryMeta: meta, __spreadAudit: resolvedSpread.audit };
       candidates.push({
         tradeDate: isoDate(date), bondCode, shortName: clean(raw.简称), issuer,
         bondType: ISSUER_MAP[issuer] || issuer, issuanceRoute: route,
-        tenor: clean(raw.期限), amount: numberValue(raw.发行量), spread: basisPointValue(raw.利差),
+        tenor: clean(raw.期限), amount: numberValue(raw.发行量), spread: resolvedSpread.spread,
         remark, summaryMeta: meta, raw: fullRaw, order: order++,
       });
     }
