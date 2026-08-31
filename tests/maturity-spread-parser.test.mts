@@ -52,16 +52,20 @@ test("parses the new-bond workbook schedule and keeps only Treasury and policy-b
     ["债券简称", "债券代码", "发行期限", "计划发行量(亿)", "实际发行量(亿)", "招标时间", "招标标的", "发行起始日", "托管机构"],
     ["26农发03(增发26)", "260403X26.IB", "3Y", 80, 80, "14:00-15:00", "价格招标", "2026/08/17", "中债登"],
     ["26进出清发001(增发2)", "092603001Z02.IB", "1Y", 20, 20, "10:00-16:30", "报价发行", "2026/08/19", "上清所"],
+    ["26国开清发02(增发13)", "09260202Z13.IB", "2Y", 30, 30, "10:00-11:00", "利率招标", "2026/08/20", "上清所"],
     ["26北京债47", "2671001.IB", "7Y", 7.3, 7.3, "09:30-10:10", "利率招标", "2026/08/17", "中债登"],
   ]);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, "利率债");
   const bytes = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
   const records = await parseIssuancePlanFile(new File([bytes], "新债发行.xlsx"));
-  assert.equal(records.length, 2);
+  assert.equal(records.length, 3);
   assert.equal(records[0].bidTime, "14:00-15:00");
   assert.equal(planSession(records[0]), "下午");
   assert.equal(planSession(records[1]), "上午");
+  assert.equal(records[1].issuanceRoute, "报价发行");
+  assert.equal(records[2].issuanceRoute, "上清所");
+  assert.equal(records[2].remark, "上清所");
 });
 
 test("uses the primary-secondary table for issuance amounts and the schedule only for session", () => {

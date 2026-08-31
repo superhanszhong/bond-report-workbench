@@ -11,10 +11,10 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     metadataBase: base,
     title: "利率债发行工作台",
-    description: "地方债日表、利差图、发行小结与周报生成的一体化工作台。",
+    description: "地方债日表、利差图、四周滚动分析与周报生成的一体化工作台。",
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
-    openGraph: { title: "利率债发行工作台", description: "地方债日表 · 一二级利差 · 周报生成", images: [{ url: preview, width: 1536, height: 1024 }] },
-    twitter: { card: "summary_large_image", title: "利率债发行工作台", description: "地方债日表 · 一二级利差 · 周报生成", images: [preview] },
+    openGraph: { title: "利率债发行工作台", description: "地方债日表 · 一二级利差 · 四周滚动分析 · 周报生成", images: [{ url: preview, width: 1536, height: 1024 }] },
+    twitter: { card: "summary_large_image", title: "利率债发行工作台", description: "地方债日表 · 一二级利差 · 四周滚动分析 · 周报生成", images: [preview] },
   };
 }
 

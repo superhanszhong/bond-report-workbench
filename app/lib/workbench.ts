@@ -99,11 +99,18 @@ const ISSUANCE_PLAN_ALIASES: Record<string, string[]> = {
   实际发行量: ["实际发行量(亿)", "实际发行量（亿）", "实际发行量"],
   招标时间: ["招标时间", "发行时间"],
   招标标的: ["招标标的"],
+  招标方式: ["招标方式"],
+  发行利率: ["发行利率"],
+  加权利率: ["加权利率(%)", "加权利率（%）", "加权利率"],
   发行起始日: ["发行起始日", "招标日", "发行日期"],
   托管机构: ["托管机构", "招标场所"],
 };
 
 const SPECIAL_SPREAD_PATTERN = /绿债|绿色|主题债|浮息债/;
+
+export function isSpecialSpreadBond(row: Pick<ParsedBondRecord, "remark" | "summaryMeta">) {
+  return SPECIAL_SPREAD_PATTERN.test(`${row.remark || ""}${row.summaryMeta?.rateType || ""}${row.summaryMeta?.note || ""}`);
+}
 
 function clean(value: unknown) {
   if (value === null || value === undefined || value === "" || value === "--") return "";
@@ -325,7 +332,9 @@ function discountComparatorKey(record: Pick<ParsedBondRecord, "bondType" | "teno
 }
 
 function rateTypeFromRemark(remark: string) {
-  if (/DR/i.test(remark)) return "DR浮息债";
+  if (/DR0{1,2}1/i.test(remark)) return "DR001浮息债";
+  if (/DR007/i.test(remark)) return "DR007浮息债";
+  if (/DR/i.test(remark)) return "DR007浮息债";
   if (/LPR/i.test(remark)) return "LPR浮息债";
   return "固息或贴现";
 }
@@ -439,13 +448,20 @@ export async function parseIssuancePlanFile(file: File) {
       const date = excelDate(raw.发行起始日);
       const bondCode = clean(raw.债券代码).replace(/\.IB$/i, "");
       if (!issuer || !date || !bondCode) continue;
-      const route = /清发|报价/.test(`${shortName}${clean(raw.招标标的)}`) ? "报价发行" : "中债招标";
+      const auctionTarget = clean(raw.招标标的);
+      const custody = clean(raw.托管机构);
+      const routeSource = `${shortName}${auctionTarget}${custody}`;
+      const route = /报价发行|前台报价/.test(auctionTarget)
+        ? "报价发行"
+        : /^09/.test(bondCode) || /清发|上清所/.test(routeSource)
+          ? "上清所"
+          : "中债招标";
       records.push({
         tradeDate: isoDate(date), bondCode, shortName, issuer: issuer.issuer, bondType: issuer.bondType,
         issuanceRoute: route, venue: shortVenue(raw.托管机构), bidTime: clean(raw.招标时间),
         tenor: clean(raw.发行期限).replace(/Y$/i, ""),
         amount: numberValue(raw.实际发行量) ?? numberValue(raw.计划发行量),
-        remark: /清发/.test(shortName) ? "前台报价发行" : "", raw,
+        remark: route === "报价发行" ? "前台报价发行" : route === "上清所" ? "上清所" : "", raw,
       });
     }
   });
@@ -536,6 +552,7 @@ export async function parseSpreadFile(file: File) {
   const sameBondHistory = new Map<string, ParsedBondRecord>();
   const discountHistory = new Map<string, ParsedBondRecord>();
   const records: ParsedBondRecord[] = candidates.map(({ order: _order, ...record }) => {
+    void _order;
     const meta = record.summaryMeta!;
     const comparisonType = isDiscountBond(record) ? "discount_comparator" : isReopenedBond(record) ? "same_bond" : null;
     const previous = comparisonType === "discount_comparator"
@@ -577,6 +594,130 @@ export function localPlanText(records: ParsedBondRecord[], date: string) {
     lines.push(`【${row.bondType || "地方债"}】${row.shortName || row.bondCode}，${row.tenor || ""}${/Y|D|M/i.test(row.tenor || "") ? "" : "Y"}，${compact(row.amount)}亿，下限${compact(row.floorRate, 2)}，${row.distributionDate ? `${cnDate(row.distributionDate)}分销` : ""}，手续费${compact(row.fee)}`);
   });
   return lines.join("\n");
+}
+
+export type RollingSpreadAnalysis = {
+  text: string;
+  benchmarkStart: string;
+  benchmarkEnd: string;
+  comparableGroups: number;
+  normalGroups: number;
+  notableGroups: number;
+  specialBonds: number;
+};
+
+function rollingTenor(value = "") {
+  const text = value.trim().toUpperCase();
+  const numeric = Number.parseFloat(text);
+  if (!Number.isFinite(numeric)) return text || "未知期限";
+  if (text.includes("D")) {
+    if (numeric <= 45) return "1M";
+    if (numeric <= 120) return "3M";
+    if (numeric <= 240) return "6M";
+    if (numeric <= 300) return "9M";
+    const years = numeric / 365;
+    const rounded = Math.round(years);
+    return Math.abs(years - rounded) <= 0.08 ? `${rounded}Y` : `${Number(years.toFixed(2))}Y`;
+  }
+  if (text.includes("M")) return `${Number(numeric.toFixed(2))}M`;
+  return `${Number(numeric.toFixed(2))}Y`;
+}
+
+function shiftIsoDate(value: string, days: number) {
+  const date = new Date(`${value}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return isoDate(date);
+}
+
+function signedBp(value: number) {
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}BP`;
+}
+
+function specialBondResult(row: ParsedBondRecord) {
+  const identity = `${row.bondType || "利率债"}${rollingTenor(row.tenor || "")}${row.shortName || row.bondCode || ""}`;
+  const source = row.summaryMeta?.auctionSpreadText || row.summaryMeta?.displaySpreadText || "";
+  const type = `${row.remark || ""}${row.summaryMeta?.rateType || ""}${row.summaryMeta?.note || ""}`;
+  if (/DR/i.test(type)) {
+    return source ? `${identity}净价结果为${source}` : `${identity}已发行，表内暂无可比净价结果`;
+  }
+  if (row.spread !== null && row.spread !== undefined && Number.isFinite(row.spread)) {
+    return `${identity}一二级利差为${signedBp(row.spread)}`;
+  }
+  return source ? `${identity}发行结果为${source}` : `${identity}已发行，表内暂无可比一二级利差`;
+}
+
+export function rollingSpreadAnalysis(
+  currentRecords: ParsedBondRecord[],
+  windowRecords: ParsedBondRecord[],
+  startDate: string,
+  endDate: string,
+  threshold = 1.5,
+): RollingSpreadAnalysis {
+  const supported = (row: ParsedBondRecord) => ["国债", "国开债", "口行债", "农发债"].includes(row.bondType || "");
+  const weekday = (row: ParsedBondRecord) => {
+    const day = new Date(`${row.tradeDate}T12:00:00`).getDay();
+    return day >= 1 && day <= 5;
+  };
+  const benchmarkStart = shiftIsoDate(startDate, -28);
+  const benchmarkEnd = shiftIsoDate(startDate, -1);
+  const inCurrent = currentRecords.filter((row) => row.tradeDate >= startDate && row.tradeDate <= endDate && supported(row) && weekday(row));
+  const ordinaryCurrent = inCurrent.filter((row) => !isSpecialSpreadBond(row) && row.spread !== null && row.spread !== undefined && Number.isFinite(row.spread));
+  const ordinaryBenchmark = windowRecords.filter((row) => row.tradeDate >= benchmarkStart && row.tradeDate <= benchmarkEnd && supported(row) && weekday(row) && !isSpecialSpreadBond(row) && row.spread !== null && row.spread !== undefined && Number.isFinite(row.spread));
+  const special = inCurrent.filter(isSpecialSpreadBond);
+  const keyOf = (row: ParsedBondRecord) => `${row.bondType || ""}|${rollingTenor(row.tenor || "")}`;
+  const averageByKey = (rows: ParsedBondRecord[]) => {
+    const groups = new Map<string, { label: string; values: number[] }>();
+    rows.forEach((row) => {
+      const key = keyOf(row);
+      const entry = groups.get(key) || { label: `${row.bondType}${rollingTenor(row.tenor || "")}`, values: [] };
+      entry.values.push(Number(row.spread));
+      groups.set(key, entry);
+    });
+    return new Map([...groups.entries()].map(([key, entry]) => [key, {
+      label: entry.label,
+      count: entry.values.length,
+      average: entry.values.reduce((sum, value) => sum + value, 0) / entry.values.length,
+    }]));
+  };
+  const current = averageByKey(ordinaryCurrent);
+  const benchmark = averageByKey(ordinaryBenchmark);
+  const comparable = [...current.entries()].map(([key, value]) => {
+    const prior = benchmark.get(key);
+    return prior ? { ...value, benchmarkAverage: prior.average, benchmarkCount: prior.count, change: value.average - prior.average } : null;
+  }).filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const notable = comparable.filter((item) => Math.abs(item.change) > threshold).sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+  const normal = comparable.filter((item) => Math.abs(item.change) <= threshold);
+  const currentRanking = [...current.values()].sort((a, b) => b.average - a.average);
+  const paragraphs: string[] = [];
+  if (!ordinaryCurrent.length) {
+    paragraphs.push("本期暂无纳入散点图口径的普通国债及政金债发行记录，无法形成四周滚动比较。");
+  } else if (!comparable.length) {
+    paragraphs.push(`本期共有${current.size}个品种期限组合，但前四周窗口（${benchmarkStart}至${benchmarkEnd}）暂无同品种同期限可比样本。`);
+    if (currentRanking.length > 1) {
+      const highest = currentRanking[0];
+      const lowest = currentRanking.at(-1)!;
+      paragraphs.push(`横向看，本期平均一二级利差最高为${highest.label}${signedBp(highest.average)}，最低为${lowest.label}${signedBp(lowest.average)}。`);
+    }
+  } else {
+    paragraphs.push(`本期共有${comparable.length}个同品种同期限组合具备前四周可比样本，其中${normal.length}个处于±${threshold.toFixed(2)}BP正常波动区间，${notable.length}个变动较为突出。`);
+    if (currentRanking.length > 1) {
+      const highest = currentRanking[0];
+      const lowest = currentRanking.at(-1)!;
+      paragraphs.push(`横向看，本期平均一二级利差最高为${highest.label}${signedBp(highest.average)}，最低为${lowest.label}${signedBp(lowest.average)}。`);
+    }
+    if (notable.length) {
+      paragraphs.push(`重点变化方面，${notable.map((item) => `${item.label}平均利差由前四周${signedBp(item.benchmarkAverage)}变为本期${signedBp(item.average)}，${item.change > 0 ? "上行" : "下行"}${Math.abs(item.change).toFixed(2)}BP`).join("；")}。`);
+    } else {
+      paragraphs.push(`各可比品种期限组合相对前四周均值的变化均未超过±${threshold.toFixed(2)}BP，整体属于正常波动。`);
+    }
+  }
+  if (special.length) paragraphs.push(`特殊债券发行汇总：${special.map(specialBondResult).join("；")}。`);
+  else paragraphs.push("本期无被散点图口径排除的浮息、绿色或主题债发行记录。");
+  return {
+    text: paragraphs.join("\n\n"), benchmarkStart, benchmarkEnd,
+    comparableGroups: comparable.length, normalGroups: normal.length,
+    notableGroups: notable.length, specialBonds: special.length,
+  };
 }
 
 export function spreadSummary(records: ParsedBondRecord[], history: ParsedBondRecord[] = []) {
