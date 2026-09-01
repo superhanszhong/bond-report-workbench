@@ -761,18 +761,18 @@ export default function Workbench() {
             </div>
             <div className="comment-audit"><Check/><span>代码末尾无 X/Z 的新券统一按收益率差计算，只写“今日新发”，不判断利差变化；增发 DR007/DR001 浮息债按净价差处理。</span></div>
             <div className="comment-entry-table-wrap"><table className="comment-entry-table">
-              <thead><tr><th>债券</th><th>发行类型</th><th>浮息类型</th><th>比较基准</th><th>二级收益率 / 净价</th><th>最终中标率 / 缴款净价</th><th>自动文字详情</th></tr></thead>
+              <thead><tr><th>债券</th><th>发行类型</th><th>浮息类型</th><th>比较基准</th><th>二级收益率 / 净价</th><th>最终中标率 / 中标净价</th><th>自动文字详情</th></tr></thead>
               <tbody>{visibleCommentResults.map(({ draft, comment, missing }) => {
                 const reopened = /[XZ]\d*$/i.test(draft.bondCode);
                 const drPricing = reopened && /^DR(?:001|007)?浮息债$/i.test(draft.rateType);
-                const benchmarkOptions = drPricing ? ["估价", "二级", "中间价"] : ["二级", "估值", "中间价", "价格"];
+                const benchmarkOptions = drPricing ? ["估价", "二级", "中间价"] : ["二级", "估值", "估值曲线", "中间价", "价格"];
                 return <tr key={draft.id}>
                   <td><strong>{draft.tenor} {draft.bondCode}</strong><small>{draft.shortName}<br/>{draft.tradeDate}</small></td>
                   <td><span className={`comment-kind ${reopened ? "comment-kind-reopened" : "comment-kind-new"}`}>{reopened ? "增发券" : "新券"}</span></td>
                   <td><select aria-label={`${draft.bondCode} 浮息类型`} value={draft.rateType} onChange={event => updateCommentDraft(draft.id,"rateType",event.target.value)}>{POLICY_FLOAT_RATE_OPTIONS.map(option => <option key={option || "empty"} value={option}>{option || "空值"}</option>)}</select></td>
                   <td><select aria-label={`${draft.bondCode} 比较基准`} value={draft.benchmarkType} onChange={event => updateCommentDraft(draft.id,"benchmarkType",event.target.value)}>{benchmarkOptions.map(option => <option key={option} value={option}>{option}</option>)}</select></td>
                   <td><input aria-label={`${draft.bondCode} 二级收益率或净价`} inputMode="decimal" value={draft.benchmarkValue} onChange={event => updateCommentDraft(draft.id,"benchmarkValue",event.target.value)} placeholder={drPricing ? "如 99.9500" : "如 1.4730"}/></td>
-                  <td><input aria-label={`${draft.bondCode} 最终中标率或缴款净价`} inputMode="decimal" value={draft.finalValue} onChange={event => updateCommentDraft(draft.id,"finalValue",event.target.value)} placeholder={drPricing ? "缴款净价" : "如 1.4381"}/></td>
+                  <td><input aria-label={`${draft.bondCode} 最终中标率或中标净价`} inputMode="decimal" value={draft.finalValue} onChange={event => updateCommentDraft(draft.id,"finalValue",event.target.value)} placeholder={drPricing ? "中标净价" : "如 1.4381"}/></td>
                   <td className="comment-output-cell">{comment ? <><pre>{comment.text}</pre><div><span>{reopened ? `上次同券：${comment.previousCode || "未找到"}` : "新券：不做历史利差判断"}</span><button onClick={() => void copyComment(comment.text, comment.displayCode)}><Copy/>复制</button></div></> : <span className="comment-missing">待填写：{missing.join("、")}</span>}</td>
                 </tr>;
               })}</tbody>

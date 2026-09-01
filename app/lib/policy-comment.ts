@@ -142,7 +142,7 @@ function netValue(text = "") {
 function direction(previous: number, current: number) {
   const tolerance = 0.0000001;
   if (Math.abs(previous - current) <= tolerance) return "持平";
-  if (Math.abs(previous) <= tolerance) return Math.abs(current) <= tolerance ? "持平" : "走阔";
+  if (Math.abs(previous) <= tolerance) return Math.abs(current) <= tolerance ? "持平" : "反转";
   if (Math.abs(current) <= tolerance) return "收窄";
   if (Math.sign(previous) !== Math.sign(current)) return "反转";
   return Math.abs(current) > Math.abs(previous) ? "走阔" : "收窄";
@@ -194,11 +194,13 @@ function ordinaryComment(row: ParsedBondRecord, records: ParsedBondRecord[]): Po
   const compare = comparison(currentText, meta?.secondaryText || "");
   const side = current === null ? "" : current > 0 ? "高" : current < 0 ? "低" : "平";
   const resultLabel = (meta?.route || row.issuanceRoute) === "报价发行" ? "报价利率" : "中标利率";
+  const winning = percentNumber(meta?.winningRateText || "");
+  const resultPrefix = `${resultLabel}${winning === null ? "" : `${compactNumber(winning, 4)}%`}`;
   const firstLine = current === null
     ? "缺少中标利差，无法生成"
     : current === 0
-      ? `${resultLabel}平${compare.label}${compare.quote ? `(${compare.quote})` : ""}`
-      : `${resultLabel}${side}${compare.label}${compare.quote ? `(${compare.quote})` : ""}${Math.abs(current).toFixed(2)}BP`;
+      ? `${resultPrefix} 平${compare.label}${compare.quote ? `(${compare.quote})` : ""}`
+      : `${resultPrefix} ${side}${compare.label}${compare.quote ? `(${compare.quote})` : ""}${Math.abs(current).toFixed(2)}BP`;
   const movement = !reopened ? "不判断" : current !== null && previousValue !== null ? direction(previousValue, current) : "待确认";
   const secondLine = reopened
     ? `${issueDescription(row)},利差${movement}(${previousText ? `上次${previousText}` : "暂无上次同券发行记录"})`
@@ -234,8 +236,8 @@ function drComment(row: ParsedBondRecord, records: ParsedBondRecord[]): PolicySh
   })();
   const side = !currentNet ? "" : currentNet.side > 0 ? "高" : currentNet.side < 0 ? "低" : "平";
   const firstLine = !currentNet || payment === null
-    ? "缺少缴款净价或估价净价差，无法生成"
-    : `缴款净价${compactNumber(payment, 4)}元 ${side}${currentNet.label}${benchmark ? `(${benchmark})` : ""}${compactNumber(currentNet.magnitude, 4)}元`;
+    ? "缺少中标净价或估价净价差，无法生成"
+    : `中标净价${compactNumber(payment, 4)}元 ${side}${currentNet.label}${benchmark ? `(${benchmark})` : ""}${compactNumber(currentNet.magnitude, 4)}元`;
   const movement = currentNet && previousNet ? direction(previousNet.value, currentNet.value) : "不判断";
   const previousCompact = previousNet
     ? `${previousNet.side > 0 ? "高" : previousNet.side < 0 ? "低" : "平"}${previousNet.label}${compactNumber(previousNet.magnitude, 4)}元`
@@ -257,7 +259,7 @@ function drComment(row: ParsedBondRecord, records: ParsedBondRecord[]): PolicySh
     firstLine,
     secondLine,
     text: `${firstLine}\n${secondLine}`,
-    warning: !currentNet || payment === null ? "未识别到缴款净价或估价净价差" : !previousNet ? "未找到可解析的上次同券净价差" : undefined,
+    warning: !currentNet || payment === null ? "未识别到中标净价或估价净价差" : !previousNet ? "未找到可解析的上次同券净价差" : undefined,
   };
 }
 
@@ -275,6 +277,7 @@ function benchmarkKind(text = "", dr = false) {
   if (/二级/.test(source)) return dr ? "二级" : "二级";
   if (/中间价/.test(source)) return "中间价";
   if (/价格/.test(source) && !/估价/.test(source)) return "价格";
+  if (/估值曲线/.test(source)) return "估值曲线";
   if (/估值|估价/.test(source)) return dr ? "估价" : "估值";
   return dr ? "估价" : "二级";
 }
@@ -382,7 +385,7 @@ export function policyDraftResults(drafts: PolicyCommentDraft[], history: Parsed
     const missing: string[] = [];
     const drPricing = isReopenedBondCode(draft.bondCode) && /^DR(?:001|007)?浮息债$/i.test(draft.rateType);
     if (!draft.benchmarkValue.trim()) missing.push(drPricing ? "估价净价" : "二级/估值");
-    if (!draft.finalValue.trim()) missing.push(drPricing ? "缴款净价" : "最终中标率");
+    if (!draft.finalValue.trim()) missing.push(drPricing ? "中标净价" : "最终中标率");
     return { draft, comment: resultMap.get(`${draft.tradeDate}|${draft.bondCode}`) || null, missing };
   });
 }

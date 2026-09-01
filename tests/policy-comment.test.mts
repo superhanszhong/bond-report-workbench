@@ -40,11 +40,11 @@ test("政金债短评复现工作样例", () => {
   ];
   const results = [...policyComments(rows, "2026-08-03"), ...policyComments(rows, "2026-07-28")];
   const byCode = new Map(results.map((row) => [row.displayCode, row.text]));
-  assert.equal(byCode.get("250409X31"), "中标利率低二级(1.473)3.49BP\n今日增发农发3Y LPR浮息债,利差收窄(上次-4.77(较估值(1.46)))");
-  assert.equal(byCode.get("260403X23"), "中标利率低二级(1.5025)1.91BP\n今日增发农发3Y,利差走阔(上次-0.94(较二级(1.495)))");
-  assert.equal(byCode.get("260405X6"), "中标利率低估值(1.575)1.53BP\n今日增发农发5Y,利差收窄(上次-2.23(较二级(1.5875)))");
-  assert.equal(byCode.get("260410X6"), "中标利率低二级(1.805)1.85BP\n今日增发农发10Y,利差走阔(上次-1.43(较二级(1.808)))");
-  assert.equal(byCode.get("09260409Z16"), "缴款净价99.9639元 高估价净价(99.95)0.0139元\n今日增发农发清发2Y DR007浮息债,利差走阔(上次高估价净价0.0009元)");
+  assert.equal(byCode.get("250409X31"), "中标利率1.4381% 低二级(1.473)3.49BP\n今日增发农发3Y LPR浮息债,利差收窄(上次-4.77(较估值(1.46)))");
+  assert.equal(byCode.get("260403X23"), "中标利率1.4834% 低二级(1.5025)1.91BP\n今日增发农发3Y,利差走阔(上次-0.94(较二级(1.495)))");
+  assert.equal(byCode.get("260405X6"), "中标利率1.5597% 低估值(1.575)1.53BP\n今日增发农发5Y,利差收窄(上次-2.23(较二级(1.5875)))");
+  assert.equal(byCode.get("260410X6"), "中标利率1.7865% 低二级(1.805)1.85BP\n今日增发农发10Y,利差走阔(上次-1.43(较二级(1.808)))");
+  assert.equal(byCode.get("09260409Z16"), "中标净价99.9639元 高估价净价(99.95)0.0139元\n今日增发农发清发2Y DR007浮息债,利差走阔(上次高估价净价0.0009元)");
 });
 
 test("新券只计算一二级收益率差，不判断历史利差", () => {
@@ -53,7 +53,7 @@ test("新券只计算一二级收益率差，不判断历史利差", () => {
     current("269999", "3", "2026-08-31", "-1.50(较二级(1.5))", "1.485%", "1.5%", "DR007浮息债"),
   ];
   const result = policyComments(rows, "2026-08-31")[0];
-  assert.equal(result.text, "中标利率低二级(1.5)1.50BP\n今日新发农发清发3Y DR007浮息债");
+  assert.equal(result.text, "中标利率1.485% 低二级(1.5)1.50BP\n今日新发农发清发3Y DR007浮息债");
   assert.equal(result.movement, "不判断");
   assert.equal(result.previousCode, "");
   assert.equal(result.warning, undefined);
@@ -67,7 +67,7 @@ test("DR001 增发券按净价差生成文字", () => {
     benchmarkType: "估价", benchmarkValue: "99.95", finalValue: "99.9639",
   };
   const result = policyDraftResults([draft], [prior])[0].comment!;
-  assert.equal(result.text, "缴款净价99.9639元 高估价净价(99.95)0.0139元\n今日增发农发清发2Y DR001浮息债,利差走阔(上次高估价净价0.0009元)");
+  assert.equal(result.text, "中标净价99.9639元 高估价净价(99.95)0.0139元\n今日增发农发清发2Y DR001浮息债,利差走阔(上次高估价净价0.0009元)");
 });
 
 test("DR 增发券的上次记录若只有收益率差，不误判为净价差", () => {
@@ -89,7 +89,7 @@ test("报价发行优先使用报价利率，普通清发债文案保留清发",
   quote.issuanceRoute = "报价发行";
   quote.summaryMeta = meta({ ...quote.summaryMeta, route: "报价发行" });
   const result = policyComments([quote], "2026-08-31")[0];
-  assert.equal(result.firstLine, "报价利率低二级(1.5)1.00BP");
+  assert.equal(result.firstLine, "报价利率1.49% 低二级(1.5)1.00BP");
   assert.match(result.secondLine, /^今日增发农发清发1Y/);
 });
 
@@ -129,4 +129,46 @@ test("二级价格为空时不把空字符串当成 0 提前生成文字", () =>
   const result = policyDraftResults([draft], [] as ParsedBondRecord[])[0];
   assert.equal(result.comment, null);
   assert.deepEqual(result.missing, ["二级/估值"]);
+});
+
+test("2026-09-01 五只政金债发行小结回归", () => {
+  const histories: ParsedBondRecord[] = [
+    { ...history("260308Z1", "2026-08-28", "-3.91(较二级(1.425))"), issuer: "中国进出口银行", bondType: "口行债", tenor: "1" },
+    { ...history("09260402Z10", "2026-08-25", "-0.25(较估值)"), tenor: "2" },
+    { ...history("09260407Z06", "2026-08-25", "0(平二级)"), tenor: "7" },
+    history("09260409Z20", "2026-08-27", "高估价净价(99.95)0.0158元", "DR浮息债"),
+  ];
+  const drafts: PolicyCommentDraft[] = [
+    {
+      id: "2026-09-01|260308X2", tradeDate: "2026-09-01", bondCode: "260308X2", shortName: "26进出08(增发2)",
+      issuer: "中国进出口银行", bondType: "口行债", tenor: "1Y", rateType: "", route: "中债招标",
+      benchmarkType: "二级", benchmarkValue: "1.42", finalValue: "1.3801",
+    },
+    {
+      id: "2026-09-01|09260411", tradeDate: "2026-09-01", bondCode: "09260411", shortName: "26农发清发11",
+      issuer: "中国农业发展银行", bondType: "农发债", tenor: "1.1123Y", rateType: "", route: "上清所",
+      benchmarkType: "估值曲线", benchmarkValue: "1.4184", finalValue: "1.42",
+    },
+    {
+      id: "2026-09-01|09260409Z21", tradeDate: "2026-09-01", bondCode: "09260409Z21", shortName: "26农发清发09(增发21)",
+      issuer: "中国农业发展银行", bondType: "农发债", tenor: "2Y", rateType: "DR007浮息债", route: "上清所",
+      benchmarkType: "二级", benchmarkValue: "99.9775", finalValue: "99.9767",
+    },
+    {
+      id: "2026-09-01|09260402Z11", tradeDate: "2026-09-01", bondCode: "09260402Z11", shortName: "26农发清发02(增发11)",
+      issuer: "中国农业发展银行", bondType: "农发债", tenor: "2Y", rateType: "", route: "上清所",
+      benchmarkType: "二级", benchmarkValue: "1.465", finalValue: "1.4643",
+    },
+    {
+      id: "2026-09-01|09260407Z07", tradeDate: "2026-09-01", bondCode: "09260407Z07", shortName: "26农发清发07(增发7)",
+      issuer: "中国农业发展银行", bondType: "农发债", tenor: "7Y", rateType: "", route: "上清所",
+      benchmarkType: "二级", benchmarkValue: "1.6625", finalValue: "1.6635",
+    },
+  ];
+  const byCode = new Map(policyDraftResults(drafts, histories).map(({ comment }) => [comment?.bondCode, comment?.text]));
+  assert.equal(byCode.get("260308X2"), "中标利率1.3801% 低二级(1.42)3.99BP\n今日增发口行1Y,利差走阔(上次-3.91(较二级(1.425)))");
+  assert.equal(byCode.get("09260411"), "中标利率1.42% 高估值曲线(1.4184)0.16BP\n今日新发农发清发1.1123Y");
+  assert.equal(byCode.get("09260409Z21"), "中标净价99.9767元 低二级净价(99.9775)0.0008元\n今日增发农发清发2Y DR007浮息债,利差反转(上次高估价净价0.0158元)");
+  assert.equal(byCode.get("09260402Z11"), "中标利率1.4643% 低二级(1.465)0.07BP\n今日增发农发清发2Y,利差收窄(上次-0.25(较估值))");
+  assert.equal(byCode.get("09260407Z07"), "中标利率1.6635% 高二级(1.6625)0.10BP\n今日增发农发清发7Y,利差反转(上次0(平二级))");
 });
