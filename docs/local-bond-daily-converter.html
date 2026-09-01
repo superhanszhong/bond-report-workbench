@@ -1,0 +1,878 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>地方债日表转换器</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+  <style>
+    :root {
+      --ink: #222427;
+      --muted: #72767b;
+      --line: #e4e2dd;
+      --paper: #f7f6f2;
+      --panel: #ffffff;
+      --accent: #b9784d;
+      --blue: #78a4ae;
+      --copper: #b9784d;
+      --ok: #5e8793;
+      --bad: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        linear-gradient(90deg, rgba(229,160,111,.12), transparent 46%),
+        linear-gradient(180deg, #fffaf6 0%, var(--paper) 72%);
+    }
+    .shell {
+      width: min(1120px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 32px 0 28px;
+    }
+    header {
+      text-align: center;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 46px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+    .sub {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.5;
+      max-width: 760px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    main {
+      max-width: 760px;
+      margin-top: 24px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .dropzone {
+      min-height: 420px;
+      border: 2px dashed #ddb79e;
+      border-radius: 8px;
+      background: var(--panel);
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+    }
+    .dropzone.drag {
+      border-color: var(--accent);
+      box-shadow: 0 16px 42px rgba(185,120,77,.14);
+      transform: translateY(-1px);
+    }
+    .drop-inner {
+      width: min(560px, 100%);
+      text-align: center;
+    }
+    .file-mark {
+      width: 92px;
+      height: 116px;
+      margin: 0 auto 22px;
+      border: 2px solid var(--blue);
+      border-radius: 6px;
+      position: relative;
+      background: linear-gradient(180deg, #ffffff, #fbeadf);
+    }
+    .file-mark::before {
+      content: "";
+      position: absolute;
+      top: -2px;
+      right: -2px;
+      border-left: 28px solid transparent;
+      border-bottom: 28px solid #f2d7c4;
+      width: 0;
+      height: 0;
+    }
+    .file-mark::after {
+      content: "XLSX";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 24px;
+      color: var(--accent);
+      font-weight: 800;
+      font-size: 18px;
+    }
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 6px;
+      background: var(--accent);
+      color: white;
+      font-weight: 700;
+      font-size: 16px;
+      padding: 12px 18px;
+      cursor: pointer;
+      min-width: 150px;
+    }
+    button:disabled {
+      cursor: wait;
+      opacity: .65;
+    }
+    input[type="file"] { display: none; }
+    .filename {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 15px;
+      word-break: break-all;
+    }
+    .status {
+      margin-top: 18px;
+      min-height: 28px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .status.ok { color: var(--ok); }
+    .status.bad { color: var(--bad); }
+    .status.work { color: var(--copper); }
+    .result-panel {
+      margin-top: 18px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .result-title {
+      font-size: 16px;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+    .text-output {
+      width: 100%;
+      min-height: 220px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 12px;
+      color: var(--ink);
+      font: 14px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      background: #fbfcfd;
+    }
+    .result-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .copy-button {
+      min-width: 110px;
+      padding: 10px 14px;
+      font-size: 14px;
+    }
+    .copy-status {
+      color: var(--ok);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    @media (max-width: 820px) {
+      .shell { width: min(100vw - 24px, 680px); padding-top: 20px; }
+      .dropzone { min-height: 360px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <h1>地方债日表转换器</h1>
+        <div class="sub">拖入 DM 下载的地方政府债 Excel，自动生成每日地方债发行计划。</div>
+      </div>
+    </header>
+    <main>
+      <section class="dropzone" id="dropzone">
+        <div class="drop-inner">
+          <div class="file-mark" aria-hidden="true"></div>
+          <input id="fileInput" type="file" accept=".xlsx,.xlsm" />
+          <button id="pickButton" type="button">选择 Excel</button>
+          <div class="filename" id="filename">把“地方政府债+日期.xlsx”拖到这里</div>
+          <div class="status" id="status"></div>
+        </div>
+      </section>
+      <section class="result-panel" id="resultPanel" hidden>
+        <div class="result-title">发行计划文本</div>
+        <textarea class="text-output" id="textOutput" readonly></textarea>
+        <div class="result-actions">
+          <button class="copy-button" id="copyButton" type="button">复制文本</button>
+          <span class="copy-status" id="copyStatus"></span>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const HEADERS = [
+      "场所", "时间", "债类型", "分销日", "代码", "简称", "期限", "发行量",
+      "发行量35%", "发行量\n-35%-35%", "热门位每组", "发行量16%", "国债差", "下限", "相似收盘",
+      "+10bp", "投标", "国债基准", "手续费", "参考综收", "参考久期"
+    ];
+    const VENUE_MAP = {
+      "深圳证券交易所": "深交所",
+      "上海证券交易所": "上交所",
+      "中央国债登记结算有限责任公司": "中债登"
+    };
+    const REQUIRED = [
+      "招标日", "招标时间", "招标场所", "债券代码", "债券简称", "类型", "性质", "期限",
+      "参考久期", "发行量(亿元)", "相似二级估值", "手续费(%)", "财政部基准",
+      "加点(bp)", "缴款日", "债券全称"
+    ];
+    const HEADER_ALIASES = {
+      "招标日": ["招标日", "发行日"],
+      "招标时间": ["招标时间"],
+      "招标场所": ["招标场所", "招标系统"],
+      "债券代码": ["债券代码"],
+      "债券简称": ["债券简称"],
+      "类型": ["类型"],
+      "性质": ["性质"],
+      "期限": ["期限"],
+      "参考久期": ["参考久期"],
+      "发行量(亿元)": ["发行量(亿元)", "发行量(亿)"],
+      "相似二级估值": ["相似二级估值", "相似券二级估值"],
+      "手续费(%)": ["手续费(%)"],
+      "财政部基准": ["财政部5日均值(%)", "财政部同期国债(5日)"],
+      "加点(bp)": ["加点(bp)", "投标加点(bp)"],
+      "投标下限": ["投标下限"],
+      "缴款日": ["缴款日"],
+      "债券全称": ["债券全称"],
+      "区域名称": ["区域名称"]
+    };
+    const RATIO_30_REGIONS = new Set(["青岛", "上海", "北京", "浙江", "西藏"]);
+    const RATIO_25_REGIONS = new Set(["江苏", "宁波"]);
+
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("fileInput");
+    const pickButton = document.getElementById("pickButton");
+    const filename = document.getElementById("filename");
+    const status = document.getElementById("status");
+    const resultPanel = document.getElementById("resultPanel");
+    const textOutput = document.getElementById("textOutput");
+    const copyButton = document.getElementById("copyButton");
+    const copyStatus = document.getElementById("copyStatus");
+
+    function setStatus(text, cls = "") {
+      status.className = "status " + cls;
+      status.textContent = text;
+    }
+
+    function cleanValue(value) {
+      return value === undefined || value === null || value === "" || value === "--" ? null : value;
+    }
+
+    function toFloat(value) {
+      value = cleanValue(value);
+      if (value === null) return null;
+      const n = Number(String(value).replace(/,/g, "").replace(/%/g, "").trim());
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function excelDateToJSDate(serial) {
+      const utcDays = Math.floor(serial - 25569);
+      const utcValue = utcDays * 86400;
+      const dateInfo = new Date(utcValue * 1000);
+      const fractionalDay = serial - Math.floor(serial) + 0.0000001;
+      let totalSeconds = Math.floor(86400 * fractionalDay);
+      const seconds = totalSeconds % 60;
+      totalSeconds -= seconds;
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor(totalSeconds / 60) % 60;
+      return new Date(dateInfo.getFullYear(), dateInfo.getMonth(), dateInfo.getDate(), hours, minutes, seconds);
+    }
+
+    function toDate(value) {
+      value = cleanValue(value);
+      if (value === null) return null;
+      if (value instanceof Date) return value;
+      if (typeof value === "number") return excelDateToJSDate(value);
+      const text = String(value).slice(0, 10);
+      const parts = text.split("-").map(Number);
+      if (parts.length === 3 && parts.every(Number.isFinite)) {
+        return new Date(parts[0], parts[1] - 1, parts[2]);
+      }
+      return null;
+    }
+
+    function issueCode(value) {
+      value = cleanValue(value);
+      if (value === null) return null;
+      const text = String(value).trim().replace(/\.IB$/i, "");
+      return /^\d+$/.test(text) ? Number(text) : text;
+    }
+
+    function tenorYears(value) {
+      value = cleanValue(value);
+      if (value === null) return null;
+      const match = String(value).toUpperCase().trim().match(/^(\d+(?:\.\d+)?)(?:Y)?\s*(\([^)]*\))?/);
+      if (!match) return null;
+      if (match[2]) return `${trimYear(match[1])}${match[2]}`;
+      const years = Number(match[1]);
+      return Number.isInteger(years) ? years : years;
+    }
+
+    function trimYear(value) {
+      const n = Number(value);
+      return Number.isInteger(n) ? String(n) : String(value);
+    }
+
+    function tenorForText(value) {
+      const text = String(value || "");
+      if (!text) return "";
+      return text.includes("(") ? text : `${text}Y`;
+    }
+
+    function tenorExcelFormula(row) {
+      return `G${row}&IF(ISNUMBER(SEARCH("(",G${row}&"")),"","Y")`;
+    }
+
+    function shortVenue(value) {
+      value = cleanValue(value);
+      if (value === null) return null;
+      const text = String(value).trim();
+      return VENUE_MAP[text] || text;
+    }
+
+    function regionName(record) {
+      const direct = cleanValue(record["区域名称"]);
+      if (direct) return normalizeRegion(String(direct));
+      const fullName = String(cleanValue(record["债券全称"]) || "");
+      const candidates = [...RATIO_30_REGIONS, ...RATIO_25_REGIONS];
+      return candidates.find((name) => fullName.includes(name)) || deriveRegionFromName(fullName);
+    }
+
+    function normalizeRegion(value) {
+      return String(value || "")
+        .replace(/壮族自治区|回族自治区|维吾尔自治区|自治区|省|市|壮族|回族|维吾尔/g, "")
+        .trim();
+    }
+
+    function allocationRatio(record) {
+      const region = regionName(record);
+      if (RATIO_30_REGIONS.has(region)) return 0.3;
+      if (RATIO_25_REGIONS.has(region)) return 0.25;
+      return 0.35;
+    }
+
+    function allocationHeader(records) {
+      const special30 = [];
+      const special25 = [];
+      records.forEach((record) => {
+        const region = regionName(record);
+        if (RATIO_30_REGIONS.has(region) && !special30.includes(region)) special30.push(region);
+        if (RATIO_25_REGIONS.has(region) && !special25.includes(region)) special25.push(region);
+      });
+      const lines = ["发行量35%"];
+      if (special30.length) lines.push(`${special30.join("/")}30%`);
+      if (special25.length) lines.push(`${special25.join("/")}25%`);
+      return lines.join("\n");
+    }
+
+    function cleanBondType(fullName, fallbackType, nature, region) {
+      let text = String(cleanValue(fullName) || "").trim();
+      if (!text) {
+        const fallback = [cleanValue(nature), cleanValue(fallbackType)].filter(Boolean).join("");
+        return fallback.includes("债") ? fallback : `${fallback}债`;
+      }
+      const regionText = String(cleanValue(region) || deriveRegionFromName(text)).trim();
+      text = text.replace(/^\d{4}年/, "");
+      return text.split("-").map((seg) => {
+        seg = seg.replace(/^\d{4}年/, "");
+        if (regionText) {
+          seg = seg.replace(new RegExp("^" + escapeRegExp(regionText) + "(壮族自治区|回族自治区|维吾尔自治区|自治区|省|市)?"), "");
+        }
+        return seg
+          .replace(/壮族自治区|回族自治区|维吾尔自治区|自治区/g, "")
+          .replace(/地方政府/g, "")
+          .replace(/政府/g, "")
+          .replace(/债券/g, "债")
+          .trim();
+      }).filter(Boolean).join("-");
+    }
+
+    function escapeRegExp(text) {
+      return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function deriveRegionFromName(fullName) {
+      const text = String(fullName || "");
+      const match = text.match(/^\d{4}年([\u4e00-\u9fa5]{2,12}?)(?:省|市|自治区)/);
+      if (!match) return "";
+      return normalizeRegion(match[1]);
+    }
+
+    function cell(v, extra = {}) {
+      if (v === null || v === undefined) return { t: "z", ...extra };
+      const out = { v, ...extra };
+      if (v instanceof Date) out.t = "d";
+      else if (typeof v === "number") out.t = "n";
+      else if (typeof v === "boolean") out.t = "b";
+      else out.t = "s";
+      return out;
+    }
+
+    function formula(f, cachedValue = undefined) {
+      const out = { f };
+      if (cachedValue !== undefined && cachedValue !== null) {
+        out.v = cachedValue;
+        out.t = typeof cachedValue === "number" ? "n" : "s";
+      }
+      return out;
+    }
+
+    function encodeCell(row, col) {
+      return XLSX.utils.encode_cell({ r: row - 1, c: col - 1 });
+    }
+
+    function set(ws, row, col, value) {
+      const address = encodeCell(row, col);
+      ws[address] = value && typeof value === "object" && ("v" in value || "f" in value) ? value : cell(value);
+    }
+
+    function applyStyles(ws, maxRow, maxCol, lastDataRow, totalRow, noteRow, textStart) {
+      const border = {
+        top: { style: "thin", color: { rgb: "000000" } },
+        bottom: { style: "thin", color: { rgb: "000000" } },
+        left: { style: "thin", color: { rgb: "000000" } },
+        right: { style: "thin", color: { rgb: "000000" } }
+      };
+      const titleBorder = {
+        top: { style: "medium", color: { rgb: "000000" } },
+        bottom: { style: "thin", color: { rgb: "000000" } },
+        left: { style: "medium", color: { rgb: "000000" } },
+        right: { style: "thin", color: { rgb: "000000" } }
+      };
+      const main = {
+        font: { name: "宋体", sz: 20, bold: true },
+        alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        border
+      };
+      const text = {
+        font: { name: "宋体", sz: 14, bold: true },
+        alignment: { horizontal: "center", vertical: "center", wrapText: false },
+        border
+      };
+      const title = {
+        font: { name: "宋体", sz: 20, bold: true },
+        alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        border: titleBorder
+      };
+      const fills = {
+        common: { patternType: "solid", fgColor: { rgb: "C6E0B4" } },
+        different: { patternType: "solid", fgColor: { rgb: "FFFF00" } },
+        floor: { patternType: "solid", fgColor: { rgb: "DDEBF7" } },
+      };
+      for (let r = 1; r <= maxRow; r++) {
+        for (let c = 1; c <= maxCol; c++) {
+          const addr = encodeCell(r, c);
+          if (!ws[addr]) ws[addr] = cell(null);
+          ws[addr].s = cloneStyle(r === 1 ? title : r < textStart ? main : text);
+          if (r >= 2 && c === 14) ws[addr].s.fill = cloneStyle(fills.floor);
+          if (r === 2 && (c === 13 || c === 19)) ws[addr].s.fill = cloneStyle(fills.common);
+          if (r >= 3 && r <= lastDataRow && (c === 13 || c === 19)) {
+            ws[addr].s.font = { name: "宋体", sz: 20, bold: true, italic: true, underline: true };
+          }
+        }
+      }
+      applyValueHighlight(ws, 13, 3, lastDataRow, fills.common, fills.different);
+      applyValueHighlight(ws, 19, 3, lastDataRow, fills.common, fills.different);
+      for (let r = 3; r <= maxRow; r++) {
+        const dateCell = ws[encodeCell(r, 4)];
+        if (dateCell) dateCell.z = "m/d;@";
+        [8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21].forEach((c) => {
+          const target = ws[encodeCell(r, c)];
+          if (target) target.z = "0.00_);[Red]\\(0.00\\)";
+        });
+        const issueAmountCell = ws[encodeCell(r, 8)];
+        if (issueAmountCell) issueAmountCell.z = "0.####";
+        const refYieldCell = ws[encodeCell(r, 20)];
+        if (refYieldCell) refYieldCell.z = "0.0000";
+        const durationCell = ws[encodeCell(r, 21)];
+        if (durationCell) durationCell.z = "0.0000";
+      }
+      for (let r = 3; r <= lastDataRow; r++) {
+        ws[encodeCell(r, 4)].z = "m/d;@";
+      }
+      for (let r = textStart; r <= maxRow; r++) {
+        [1, 5, 9, 14].forEach((c) => {
+          if (ws[encodeCell(r, c)]) {
+            ws[encodeCell(r, c)].s.alignment = { horizontal: c === 1 || c === 8 ? "center" : "left", vertical: "center", wrapText: false };
+          }
+        });
+      }
+      if (ws[encodeCell(noteRow, 9)]) {
+        ws[encodeCell(noteRow, 9)].s.alignment = { horizontal: "center", vertical: "center", wrapText: true };
+      }
+    }
+
+    function cloneStyle(style) {
+      return JSON.parse(JSON.stringify(style));
+    }
+
+    function applyValueHighlight(ws, col, firstRow, lastRow, commonFill, differentFill) {
+      const counts = new Map();
+      for (let r = firstRow; r <= lastRow; r++) {
+        const key = valueKey(ws[encodeCell(r, col)]?.v);
+        if (!key) continue;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      let commonKey = "";
+      let commonCount = -1;
+      counts.forEach((count, key) => {
+        if (count > commonCount) {
+          commonKey = key;
+          commonCount = count;
+        }
+      });
+      for (let r = firstRow; r <= lastRow; r++) {
+        const addr = encodeCell(r, col);
+        const key = valueKey(ws[addr]?.v);
+        if (!key) continue;
+        ws[addr].s.fill = cloneStyle(key === commonKey ? commonFill : differentFill);
+      }
+    }
+
+    function valueKey(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "";
+      return String(Math.round(n * 10000) / 10000);
+    }
+
+    function readRecords(workbook) {
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+      const { headerRow, index } = detectHeader(rows);
+      const missing = REQUIRED.filter((name) => index[name] === undefined);
+      if (missing.length) throw new Error("源文件缺少必要列：" + missing.join("、"));
+
+      const records = [];
+      let bidDate = null;
+      for (let r = headerRow + 1; r < rows.length; r++) {
+        const row = rows[r];
+        if (!cleanValue(row[index["债券代码"]])) continue;
+        const rec = {};
+        Object.entries(index).forEach(([name, col]) => {
+          if (col !== undefined) rec[name] = row[col];
+        });
+        rec.__sourceOrder = r;
+        bidDate = bidDate || toDate(rec["招标日"]);
+        records.push(rec);
+      }
+      if (!records.length) throw new Error("源文件未读取到有效债券明细");
+      records.sort((a, b) => {
+        const timeDiff = bidTimeKey(a["招标时间"]) - bidTimeKey(b["招标时间"]);
+        const venueDiff = String(shortVenue(a["招标场所"]) || "")
+          .localeCompare(String(shortVenue(b["招标场所"]) || ""), "zh-Hans-CN");
+        return timeDiff || venueDiff || a.__sourceOrder - b.__sourceOrder;
+      });
+      return { records, bidDate };
+    }
+
+    function detectHeader(rows) {
+      let best = { headerRow: -1, index: {}, score: -1 };
+      rows.slice(0, 10).forEach((row, rowIndex) => {
+        const normalized = new Map();
+        (row || []).forEach((value, colIndex) => {
+          if (value === null || value === undefined) return;
+          normalized.set(String(value).trim(), colIndex);
+        });
+        const index = {};
+        let score = 0;
+        Object.entries(HEADER_ALIASES).forEach(([canonical, aliases]) => {
+          for (const alias of aliases) {
+            if (normalized.has(alias)) {
+              index[canonical] = normalized.get(alias);
+              score += REQUIRED.includes(canonical) ? 1 : 0;
+              break;
+            }
+          }
+        });
+        if (score > best.score) best = { headerRow: rowIndex, index, score };
+      });
+      if (best.headerRow < 0) throw new Error("未识别到表头");
+      return best;
+    }
+
+    function bidTimeKey(value) {
+      value = cleanValue(value);
+      if (value === null) return Number.MAX_SAFE_INTEGER;
+      const text = String(value);
+      const match = text.match(/(\d{1,2})\s*:\s*(\d{2})/);
+      if (!match) return Number.MAX_SAFE_INTEGER;
+      return Number(match[1]) * 60 + Number(match[2]);
+    }
+
+    function bondMetrics(rec) {
+      const spread = (toFloat(rec["加点(bp)"]) || 0) / 100;
+      const fiscalBenchmark = toFloat(rec["财政部基准"]);
+      const bidFloor = toFloat(rec["投标下限"]);
+      const treasury = fiscalBenchmark !== null ? fiscalBenchmark : (bidFloor !== null ? bidFloor - spread : null);
+      const floor = fiscalBenchmark !== null ? treasury + spread : bidFloor;
+      const fee = toFloat(rec["手续费(%)"]);
+      const duration = toFloat(rec["参考久期"]);
+      const reference = floor === null || fee === null || !duration ? null : fee / duration + floor;
+      return { spread, treasury, floor, fee, duration, reference };
+    }
+
+    function cnDate(date) {
+      return date instanceof Date ? `${date.getMonth() + 1}月${date.getDate()}日` : "";
+    }
+
+    function compactNumber(value, maxDecimals = 4) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "";
+      const factor = 10 ** maxDecimals;
+      const rounded = Math.round((n + Number.EPSILON) * factor) / factor;
+      return String(rounded).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+    }
+
+    function regionBondLabel(record) {
+      const region = regionName(record);
+      if (region) return `${region}债`;
+      const shortName = String(cleanValue(record["债券简称"]) || "");
+      const match = shortName.match(/^\d{2}(.+?债)(?:\d+)?$/);
+      if (match) return match[1];
+      return "地方债";
+    }
+
+    function generatePlanText(records, bidDate) {
+      const lines = [`【${cnDate(bidDate) || ""}地方债发行计划】`];
+      let currentGroup = "";
+      records.forEach((rec) => {
+        const group = `【${[shortVenue(rec["招标场所"]), cleanValue(rec["招标时间"]), regionBondLabel(rec)].filter(Boolean).join(" ")}】`;
+        if (group !== currentGroup) {
+          lines.push(group);
+          currentGroup = group;
+        }
+        const metrics = bondMetrics(rec);
+        const typeText = cleanBondType(rec["债券全称"], rec["类型"], rec["性质"], rec["区域名称"]);
+        const name = cleanValue(rec["债券简称"]) || "";
+        const tenorText = tenorForText(tenorYears(rec["期限"]));
+        const amountText = compactNumber(toFloat(rec["发行量(亿元)"]), 4);
+        const floorValue = Number(metrics.floor);
+        const floorText = Number.isFinite(floorValue) ? compactNumber(Math.round((floorValue + Number.EPSILON) * 100) / 100, 2) : "";
+        const distributeDate = cnDate(toDate(rec["缴款日"]));
+        const feeText = compactNumber(metrics.fee, 4);
+        lines.push(`【${typeText}】${name}，${tenorText}，${amountText}亿，下限${floorText}，${distributeDate}分销，手续费${feeText}`);
+      });
+      return lines.join("\n");
+    }
+
+    function showPlanText(text) {
+      textOutput.value = text;
+      copyStatus.textContent = "";
+      resultPanel.hidden = false;
+    }
+
+    function buildWorkbook(records, bidDate) {
+      const wb = XLSX.utils.book_new();
+      const ws = {};
+      const firstDataRow = 3;
+      const lastDataRow = firstDataRow + records.length - 1;
+      const totalRow = lastDataRow + 1;
+      const noteRow = totalRow + 1;
+      const textStart = noteRow + 1;
+      const maxRow = textStart + records.length - 1;
+      const maxCol = 21;
+
+      const title = bidDate ? `${bidDate.getMonth() + 1}月${bidDate.getDate()}日地方债发行计划` : "地方债发行计划";
+      set(ws, 1, 1, title);
+      const headers = [...HEADERS];
+      headers[8] = allocationHeader(records);
+      headers.forEach((h, i) => set(ws, 2, i + 1, h));
+
+      records.forEach((rec, offset) => {
+        const row = firstDataRow + offset;
+        set(ws, row, 1, shortVenue(rec["招标场所"]));
+        set(ws, row, 2, cleanValue(rec["招标时间"]));
+        set(ws, row, 3, cleanBondType(rec["债券全称"], rec["类型"], rec["性质"], rec["区域名称"]));
+        set(ws, row, 4, toDate(rec["缴款日"]));
+        set(ws, row, 5, issueCode(rec["债券代码"]));
+        set(ws, row, 6, cleanValue(rec["债券简称"]));
+        set(ws, row, 7, tenorYears(rec["期限"]));
+        set(ws, row, 8, toFloat(rec["发行量(亿元)"]));
+        const issueAmount = toFloat(rec["发行量(亿元)"]);
+        const ratio = allocationRatio(rec);
+        const amountRatio = issueAmount === null ? null : Math.round(issueAmount * ratio * 10) / 10;
+        const amountRest = issueAmount === null || amountRatio === null || ratio !== 0.35 ? null : Math.floor((issueAmount - amountRatio - amountRatio) * 10) / 10;
+        const hotBidLimit = amountRest === null ? null : Math.round((amountRest / 3) * 10) / 10;
+        const amount16 = issueAmount === null ? null : Math.floor(issueAmount * 0.16 * 10) / 10;
+        set(ws, row, 9, formula(`ROUND(H${row}*${ratio},1)`, amountRatio));
+        if (ratio === 0.35) {
+          set(ws, row, 10, formula(`ROUNDDOWN(H${row}-I${row}-I${row},1)`, amountRest));
+          set(ws, row, 11, formula(`ROUND(J${row}/3,1)`, hotBidLimit));
+        } else {
+          set(ws, row, 10, "-");
+          set(ws, row, 11, "-");
+        }
+        set(ws, row, 12, formula(`ROUNDDOWN(H${row}*0.16,1)`, amount16));
+        const metrics = bondMetrics(rec);
+        set(ws, row, 13, metrics.spread);
+        set(ws, row, 14, formula(`R${row}+M${row}`, metrics.floor));
+        set(ws, row, 15, toFloat(rec["相似二级估值"]));
+        const comparable = toFloat(rec["相似二级估值"]);
+        set(ws, row, 16, formula(`0.1+O${row}`, comparable === null ? null : comparable + 0.1));
+        set(ws, row, 18, metrics.treasury);
+        set(ws, row, 19, metrics.fee);
+        set(ws, row, 20, formula(`S${row}/U${row}+N${row}`, metrics.reference));
+        set(ws, row, 21, metrics.duration);
+      });
+
+      set(ws, totalRow, 7, "合计");
+      const sumCol = (col) => records.reduce((sum, _, i) => sum + (toFloat(ws[encodeCell(firstDataRow + i, col)]?.v) || 0), 0);
+      set(ws, totalRow, 8, formula(`SUM(H${firstDataRow}:H${lastDataRow})`, sumCol(8)));
+      set(ws, totalRow, 9, formula(`SUM(I${firstDataRow}:I${lastDataRow})`, sumCol(9)));
+      set(ws, totalRow, 10, formula(`SUM(J${firstDataRow}:J${lastDataRow})`, sumCol(10)));
+      set(ws, noteRow, 9, "青岛 上海 北京 浙江 西藏 是30%  江苏 宁波25%，其他都是35%");
+
+      for (let dataRow = firstDataRow; dataRow <= lastDataRow; dataRow++) {
+        const row = textStart + (dataRow - firstDataRow);
+        const name = ws[encodeCell(dataRow, 6)]?.v || "";
+        const tenor = ws[encodeCell(dataRow, 7)]?.v || "";
+        const amount = ws[encodeCell(dataRow, 8)]?.v || "";
+        const floor = ws[encodeCell(dataRow, 14)]?.v;
+        const treasury = ws[encodeCell(dataRow, 18)]?.v;
+        const spread = ws[encodeCell(dataRow, 13)]?.v || 0;
+        const fee = ws[encodeCell(dataRow, 19)]?.v || "";
+        const distributeDate = ws[encodeCell(dataRow, 4)]?.v;
+        const month = distributeDate instanceof Date ? distributeDate.getMonth() + 1 : "";
+        const day = distributeDate instanceof Date ? distributeDate.getDate() : "";
+        const typeText = ws[encodeCell(dataRow, 3)]?.v || "";
+        const tenorText = tenorForText(tenor);
+        const lineText = `${name}，${tenorText}，${amount}亿，下限(国债基准${round2(treasury)}+${Math.round(spread * 100)}bp)=${round2(floor)}，${month}月${day}日分销，手续费${fee}`;
+        const titleText = `【${typeText}】`;
+        const quoteBp = Number.isFinite(Number(floor)) && Number.isFinite(Number(fee)) ? Math.round((floor - fee) * 100) : "";
+        const quoteText = `${name},${tenorText}，${amount}亿, ${round2(floor)}%,国债基准+${quoteBp}bp`;
+        set(ws, row, 1, formula(`F${dataRow}&"，"&${tenorExcelFormula(dataRow)}&"，"&H${dataRow}&"亿，下限(国债基准"&ROUND(R${dataRow},2)&"+"&RIGHT(M${dataRow}*100,2)&"bp)="&ROUND(N${dataRow},2)&"，"&MONTH(D${dataRow})&"月"&DAY(D${dataRow})&"日"&"分销，手续费"&S${dataRow}`, lineText));
+        set(ws, row, 5, formula(`"【"&C${dataRow}&"】"`, titleText));
+        set(ws, row, 8, formula(`N${dataRow}`, floor));
+        set(ws, row, 9, formula(`F${dataRow}&","&${tenorExcelFormula(dataRow)}&"，"&H${dataRow}&"亿, "&H${row}&"%"&",国债基准+"&ROUND(H${row}-S${dataRow},2)*100&"bp"`, quoteText));
+        set(ws, row, 14, formula(`E${row}&A${row}`, titleText + lineText));
+      }
+
+      const merges = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 20 } }];
+      let groupStart = firstDataRow;
+      while (groupStart <= lastDataRow) {
+        const key = `${ws[encodeCell(groupStart, 1)]?.v || ""}||${ws[encodeCell(groupStart, 2)]?.v || ""}`;
+        let groupEnd = groupStart;
+        while (groupEnd + 1 <= lastDataRow) {
+          const nextKey = `${ws[encodeCell(groupEnd + 1, 1)]?.v || ""}||${ws[encodeCell(groupEnd + 1, 2)]?.v || ""}`;
+          if (nextKey !== key) break;
+          groupEnd++;
+        }
+        if (groupEnd > groupStart) {
+          merges.push({ s: { r: groupStart - 1, c: 0 }, e: { r: groupEnd - 1, c: 0 } });
+          merges.push({ s: { r: groupStart - 1, c: 1 }, e: { r: groupEnd - 1, c: 1 } });
+          for (let r = groupStart + 1; r <= groupEnd; r++) {
+            delete ws[encodeCell(r, 1)];
+            delete ws[encodeCell(r, 2)];
+          }
+        }
+        groupStart = groupEnd + 1;
+      }
+
+      ws["!ref"] = `A1:U${maxRow}`;
+      ws["!merges"] = merges;
+      ws["!cols"] = [
+        18.5, 24.6640625, 62, 18.6640625, 27.5, 34.6640625, 25.83203125, 30,
+        36.6640625, 23.33203125, 19.33203125, 19.33203125, 20.5, 21.1640625,
+        22.1640625, 23.5, 16.83203125, 16.6640625, 21.1640625, 17.33203125,
+        24.1640625
+      ].map((wch) => ({ wch }));
+      ws["!rows"] = Array.from({ length: maxRow }, (_, i) => {
+        const row = i + 1;
+        if (row === 1) return { hpt: 38 };
+        if (row === 2) return { hpt: 54 };
+        if (row >= 3 && row <= lastDataRow) return { hpt: 65 };
+        return { hpt: 30 };
+      });
+      ws["!autofilter"] = { ref: `A2:U${lastDataRow}` };
+      ws["!margins"] = { left: 0.25, right: 0.25, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 };
+      applyStyles(ws, maxRow, maxCol, lastDataRow, totalRow, noteRow, textStart);
+      wb.Workbook = wb.Workbook || {};
+      wb.Workbook.CalcPr = { calcMode: "auto" };
+      XLSX.utils.book_append_sheet(wb, ws, "3.21模版");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([[]]), "Sheet1");
+      return wb;
+    }
+
+    function round2(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "";
+      return Math.round(n * 100) / 100;
+    }
+
+    async function convert(file) {
+      if (!file) return;
+      if (!window.XLSX) {
+        setStatus("Excel 组件未加载，请刷新页面后重试。", "bad");
+        return;
+      }
+      filename.textContent = file.name;
+      setStatus("正在转换...", "work");
+      resultPanel.hidden = true;
+      textOutput.value = "";
+      copyStatus.textContent = "";
+      pickButton.disabled = true;
+      try {
+        const buffer = await file.arrayBuffer();
+        const sourceWorkbook = XLSX.read(buffer, { type: "array", cellDates: true });
+        const { records, bidDate } = readRecords(sourceWorkbook);
+        const outputWorkbook = buildWorkbook(records, bidDate);
+        const planText = generatePlanText(records, bidDate);
+        const datePart = bidDate
+          ? `${bidDate.getFullYear()}${String(bidDate.getMonth() + 1).padStart(2, "0")}${String(bidDate.getDate()).padStart(2, "0")}`
+          : "未识别日期";
+        XLSX.writeFile(outputWorkbook, `每日地方债发行计划_${datePart}.xlsx`, { bookType: "xlsx" });
+        showPlanText(planText);
+        setStatus(`完成：${records.length} 只债`, "ok");
+      } catch (error) {
+        setStatus(error.message || String(error), "bad");
+      } finally {
+        pickButton.disabled = false;
+      }
+    }
+
+    copyButton.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(textOutput.value);
+        copyStatus.textContent = "已复制";
+      } catch (error) {
+        textOutput.focus();
+        textOutput.select();
+        copyStatus.textContent = "请按 Command+C 复制";
+      }
+    });
+
+    pickButton.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => convert(fileInput.files[0]));
+    ["dragenter", "dragover"].forEach((eventName) => {
+      dropzone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzone.classList.add("drag");
+      });
+    });
+    ["dragleave", "drop"].forEach((eventName) => {
+      dropzone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzone.classList.remove("drag");
+      });
+    });
+    dropzone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      convert(event.dataTransfer.files[0]);
+    });
+  </script>
+</body>
+</html>

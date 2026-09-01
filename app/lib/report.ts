@@ -24,7 +24,7 @@ type ReportInput = {
 const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const XML = "http://www.w3.org/XML/1998/namespace";
 const MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-const TEMPLATE_URL = "/templates/weekly-bond-report-template.docx";
+const TEMPLATE_URL = `${import.meta.env?.BASE_URL || "/"}templates/weekly-bond-report-template.docx`;
 
 // 已经人工核定的历史口径，用于连续周报在上周明细不完整时仍能准确衔接。
 // 新一周仍优先根据当周一二级发行量和到期 Excel 计算当周净融资。

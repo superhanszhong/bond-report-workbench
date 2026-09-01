@@ -13,6 +13,7 @@ import { buildWeeklyReportBlob } from "./lib/report";
 import {
   createPolicyCommentDrafts, policyDraftResults, PolicyCommentDraft, POLICY_FLOAT_RATE_OPTIONS,
 } from "./lib/policy-comment";
+import { LOCAL_STORAGE_MODE, workbenchRequest } from "./lib/workbench-request";
 
 type StoredRecord = ParsedBondRecord & {
   id: number;
@@ -47,6 +48,7 @@ type WeekData = {
 
 type LatestDates = { local_bond?: string; spread?: string; maturity?: string; issuance_plan?: string };
 type DatasetType = "local_bond" | "spread" | "maturity" | "issuance_plan";
+const ASSET_BASE = import.meta.env?.BASE_URL || "/";
 
 const tabGroups = [
   { label: "工作台", items: [["overview", "首页"]] },
@@ -273,7 +275,7 @@ function SpreadChart({ records, svgRef, startDate, endDate }: { records: ParsedB
 function BrandLogo() {
   return <div className="brand-logo">
     <svg className="brand-logo-full" viewBox="970 350 1950 370" role="img" aria-label="东方证券 FICC" preserveAspectRatio="xMidYMid meet">
-      <image href="/orient-ficc-logo.png" width="3878" height="1071" />
+      <image href={`${ASSET_BASE}orient-ficc-logo.png`} width="3878" height="1071" />
     </svg>
   </div>;
 }
@@ -354,9 +356,9 @@ export default function Workbench() {
       const historyStart = shiftDate(weekStart, -370);
       const historyEnd = shiftDate(weekStart, -1);
       const [response, latestResponse, historyResponse] = await Promise.all([
-        fetch(`/api/workbench?weekStart=${weekStart}`),
-        fetch("/api/workbench?meta=latest"),
-        fetch(`/api/workbench?startDate=${historyStart}&endDate=${historyEnd}`),
+        workbenchRequest(`/api/workbench?weekStart=${weekStart}`),
+        workbenchRequest("/api/workbench?meta=latest"),
+        workbenchRequest(`/api/workbench?startDate=${historyStart}&endDate=${historyEnd}`),
       ]);
       const payload = await response.json() as WeekData & { error?: string };
       const latestPayload = await latestResponse.json() as { latestDates?: LatestDates; error?: string };
@@ -408,7 +410,7 @@ export default function Workbench() {
         if (!inWeek.length) throw new Error(`文件中没有 ${displayWeek(weekStart)} 的记录`);
         groups.set(weekStart, inWeek);
       }
-      if (isHistoricalBase) setMessage(`已识别 ${groups.size} 个交易周，正在同步到共享数据库…`);
+      if (isHistoricalBase) setMessage(`已识别 ${groups.size} 个交易周，正在保存到${LOCAL_STORAGE_MODE ? "当前浏览器" : "共享数据库"}…`);
       let added = 0;
       let updated = 0;
       let unchanged = 0;
@@ -418,7 +420,7 @@ export default function Workbench() {
         while (cursor < entries.length) {
           const [recordWeek, group] = entries[cursor++];
           const tradeDate = group.map((r) => r.tradeDate).sort().at(-1)!;
-          const response = await fetch("/api/workbench", {
+          const response = await workbenchRequest("/api/workbench", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ datasetType: type, tradeDate, weekStart: recordWeek, fileName: file.name, records: group }),
           });
@@ -431,7 +433,7 @@ export default function Workbench() {
       }
       await Promise.all(Array.from({ length: Math.min(6, entries.length) }, () => saveNext()));
       const result = `新增${added}条，更新${updated}条，保留${unchanged}条未变化记录`;
-      setMessage(isHistoricalBase ? `历史数据已同步至共享数据库：${groups.size} 个交易周，${result}` : `已入库：${result}`);
+      setMessage(isHistoricalBase ? `历史数据已保存至${LOCAL_STORAGE_MODE ? "当前浏览器" : "共享数据库"}：${groups.size} 个交易周，${result}` : `已入库：${result}`);
       await loadWeek();
     } catch (error) { setMessage(error instanceof Error ? error.message : "上传失败"); }
   }
@@ -451,7 +453,7 @@ export default function Workbench() {
     setChartLoading(true);
     try {
       const benchmarkStart = shiftDate(analysisStart, -28);
-      const response = await fetch(`/api/workbench?startDate=${benchmarkStart}&endDate=${analysisEnd}`);
+      const response = await workbenchRequest(`/api/workbench?startDate=${benchmarkStart}&endDate=${analysisEnd}`);
       const payload = await response.json() as { records?: StoredRecord[]; error?: string };
       if (!response.ok) throw new Error(payload.error || "读取区间数据失败");
       const stored = (payload.records || []).map(normalize);
@@ -543,7 +545,7 @@ export default function Workbench() {
   }
 
   async function deleteImport(importId: string) {
-    const response = await fetch(`/api/workbench?importId=${encodeURIComponent(importId)}`, { method: "DELETE" });
+    const response = await workbenchRequest(`/api/workbench?importId=${encodeURIComponent(importId)}`, { method: "DELETE" });
     if (response.ok) await loadWeek();
   }
 
@@ -574,8 +576,8 @@ export default function Workbench() {
       const previousStart = shiftWeek(weekStart, -1);
       const yearStart = `${weekStart.slice(0, 4)}-01-01`;
       const [previousResponse, ytdLocalResponse] = await Promise.all([
-        fetch(`/api/workbench?weekStart=${previousStart}`),
-        fetch(`/api/workbench?startDate=${yearStart}&endDate=${weekEnd}&datasetType=local_bond`),
+        workbenchRequest(`/api/workbench?weekStart=${previousStart}`),
+        workbenchRequest(`/api/workbench?startDate=${yearStart}&endDate=${weekEnd}&datasetType=local_bond`),
       ]);
       const previousPayload = await previousResponse.json() as WeekData & { error?: string };
       const ytdLocalPayload = await ytdLocalResponse.json() as { records?: StoredRecord[]; error?: string };
@@ -618,7 +620,7 @@ export default function Workbench() {
       <aside className="sidebar">
         <div className="brand"><BrandLogo/><div className="brand-copy"><strong>利率债发行工作台</strong><small>Issuance Desk</small></div></div>
         <nav>{tabGroups.map(group => <div className="nav-group" key={group.label}><span className="nav-group-label">{group.label}</span>{group.items.map(([key, label]) => <button key={key} className={active === key ? "nav-active" : ""} onClick={() => setActive(key)}>{key === "overview" ? <House/> : key === "local" ? <FileSpreadsheet/> : key === "spread" ? <BarChart3/> : <FileText/>}<span>{label}</span></button>)}</div>)}</nav>
-        <div className="side-note"><Check size={16}/><span>公开共享数据<br/>周度记录集中留存</span></div>
+        <div className="side-note"><Check size={16}/><span>{LOCAL_STORAGE_MODE ? <>数据保存在当前浏览器<br/>换设备需重新上传</> : <>公开共享数据<br/>周度记录集中留存</>}</span></div>
       </aside>
 
       <section className="workspace">
@@ -700,7 +702,7 @@ export default function Workbench() {
           <div className="converter-intro">
             <div><span className="section-label">LOCAL CONVERTER</span><h2>地方债日表转换器</h2><p>拖入 DM 下载的“地方政府债+日期.xlsx”，自动下载每日发行计划并生成可复制文本。文件仅在浏览器本地处理。</p></div>
           </div>
-          <iframe className="converter-frame" title="地方债日表转换器" src="/local-bond-daily-converter.html" />
+          <iframe className="converter-frame" title="地方债日表转换器" src={`${ASSET_BASE}local-bond-daily-converter.html`} />
         </section>}
 
         {active === "spread" && <section className="panel focus-panel">
