@@ -300,6 +300,8 @@ export default function Workbench() {
   const [commentPlanFileName, setCommentPlanFileName] = useState("");
   const [commentHistoryFileName, setCommentHistoryFileName] = useState("");
   const [commentSelectedDate, setCommentSelectedDate] = useState("");
+  const [selectedCommentIds, setSelectedCommentIds] = useState<string[]>([]);
+  const [commentDragTarget, setCommentDragTarget] = useState<"plan" | "history" | null>(null);
   const [commentLoading, setCommentLoading] = useState(false);
   const [chartLoading, setChartLoading] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
@@ -349,6 +351,8 @@ export default function Workbench() {
   const effectiveCommentDate = commentDates.includes(commentSelectedDate) ? commentSelectedDate : commentDates.at(-1) || "";
   const visibleCommentResults = commentResults.filter((item) => item.draft.tradeDate === effectiveCommentDate);
   const completedComments = visibleCommentResults.filter((item) => item.comment);
+  const selectedCompletedComments = completedComments.filter((item) => selectedCommentIds.includes(item.draft.id));
+  const allCompletedSelected = completedComments.length > 0 && selectedCompletedComments.length === completedComments.length;
 
   async function loadWeek() {
     setLoading(true);
@@ -480,6 +484,7 @@ export default function Workbench() {
       if (!drafts.length) throw new Error("文件中没有识别到国开、口行或农发债");
       setCommentPlanRecords(parsed);
       setCommentDrafts(drafts);
+      setSelectedCommentIds([]);
       setCommentSelectedDate([...new Set(drafts.map((draft) => draft.tradeDate))].sort().at(-1) || "");
       setCommentPlanFileName(file.name);
       setMessage(`今日待填写区已生成：${drafts.length} 只政金债，可填写二级价格和最终中标率`);
@@ -506,6 +511,31 @@ export default function Workbench() {
     }
   }
 
+  function dropCommentFile(event: React.DragEvent<HTMLElement>, target: "plan" | "history") {
+    event.preventDefault();
+    event.stopPropagation();
+    setCommentDragTarget(null);
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+    if (!/\.(?:xlsx|xlsm)$/i.test(file.name)) {
+      setMessage("请拖入 .xlsx 或 .xlsm 文件");
+      return;
+    }
+    if (target === "plan") void loadCommentPlanFile(file);
+    else void loadCommentHistoryFile(file);
+  }
+
+  function toggleCommentSelection(id: string) {
+    setSelectedCommentIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  }
+
+  function toggleAllCompletedComments() {
+    const completedIds = completedComments.map((item) => item.draft.id);
+    setSelectedCommentIds((current) => allCompletedSelected
+      ? current.filter((id) => !completedIds.includes(id))
+      : [...new Set([...current, ...completedIds])]);
+  }
+
   function updateCommentDraft(id: string, field: "rateType" | "benchmarkType" | "benchmarkValue" | "finalValue", value: string) {
     setCommentDrafts((current) => current.map((draft) => {
       if (draft.id !== id) return draft;
@@ -530,9 +560,9 @@ export default function Workbench() {
     }
   }
 
-  async function copyAllComments() {
-    if (!completedComments.length) return;
-    await copyComment(completedComments.map((row) => row.comment!.text).join("\n\n"), `${effectiveCommentDate}全部政金债`);
+  async function copySelectedComments() {
+    if (!selectedCompletedComments.length) return;
+    await copyComment(selectedCompletedComments.map((row) => row.comment!.text).join("\n\n"), `${effectiveCommentDate}已选${selectedCompletedComments.length}只政金债`);
   }
 
   async function copyRollingAnalysis() {
@@ -736,7 +766,9 @@ export default function Workbench() {
           </section>
         </section>}
 
-        {active === "comment" && <section className="panel focus-panel comment-panel">
+        {active === "comment" && <section className="panel focus-panel comment-panel"
+          onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
+          onDrop={event => dropCommentFile(event, "plan")}>
           <div className="panel-head comment-panel-head">
             <div><span className="section-label">DAILY INPUT</span><h2>今日政金债填写区</h2><p>先上传“新债发行”Excel，系统只提取国开、口行和农发债。你填写比较基准与最终中标率后，发行小结会即时生成。</p></div>
             <button className="secondary" onClick={() => commentPlanInput.current?.click()} disabled={commentLoading}>{commentLoading ? <LoaderCircle className="spin"/> : <Upload/>}{commentPlanFileName ? "更换发行文件" : "上传新债发行"}</button>
@@ -744,31 +776,45 @@ export default function Workbench() {
           <input ref={commentPlanInput} hidden type="file" accept=".xlsx,.xlsm" onChange={event => { const file = event.target.files?.[0]; if (file) void loadCommentPlanFile(file); event.currentTarget.value = ""; }}/>
           <input ref={commentHistoryInput} hidden type="file" accept=".xlsx,.xlsm" onChange={event => { const file = event.target.files?.[0]; if (file) void loadCommentHistoryFile(file); event.currentTarget.value = ""; }}/>
           <div className="comment-source-grid">
-            <button className="comment-source-card comment-plan-source" onClick={() => commentPlanInput.current?.click()} disabled={commentLoading}>
+            <button className={`comment-source-card comment-plan-source ${commentDragTarget === "plan" ? "drag-active" : ""}`} onClick={() => commentPlanInput.current?.click()} disabled={commentLoading}
+              onDragEnter={event => { event.preventDefault(); setCommentDragTarget("plan"); }}
+              onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
+              onDragLeave={() => setCommentDragTarget(null)}
+              onDrop={event => dropCommentFile(event, "plan")}>
               <FileSpreadsheet/><span><small>第一步 · 今日发行</small><strong>{commentPlanFileName || "上传新债发行 Excel"}</strong><em>{commentDrafts.length ? `已转换 ${commentDrafts.length} 只政金债` : "自动过滤地方债与信用债"}</em></span>
             </button>
-            <button className="comment-source-card" onClick={() => commentHistoryInput.current?.click()} disabled={commentLoading}>
+            <button className={`comment-source-card ${commentDragTarget === "history" ? "drag-active" : ""}`} onClick={() => commentHistoryInput.current?.click()} disabled={commentLoading}
+              onDragEnter={event => { event.preventDefault(); setCommentDragTarget("history"); }}
+              onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
+              onDragLeave={() => setCommentDragTarget(null)}
+              onDrop={event => dropCommentFile(event, "history")}>
               <RefreshCw/><span><small>历史来源 · 同券回溯</small><strong>{commentHistoryFileName || "工作台一二级利差历史库"}</strong><em>{commentHistorySource.length ? `当前可用 ${commentHistorySource.length} 条记录` : "如历史库为空，可在此上传一二级利差 Excel"}</em></span>
             </button>
           </div>
-          {!commentDrafts.length ? <button className="comment-drop" onClick={() => commentPlanInput.current?.click()} disabled={commentLoading}>
+          {!commentDrafts.length ? <button className={`comment-drop ${commentDragTarget === "plan" ? "drag-active" : ""}`} onClick={() => commentPlanInput.current?.click()} disabled={commentLoading}
+            onDragEnter={event => { event.preventDefault(); setCommentDragTarget("plan"); }}
+            onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
+            onDragLeave={() => setCommentDragTarget(null)}
+            onDrop={event => dropCommentFile(event, "plan")}>
             {commentLoading ? <LoaderCircle className="spin"/> : <Upload/>}
-            <span><strong>上传“新债发行-日期.xlsx”开始</strong><small>转换后将在下方显示债券代码、期限、比较基准、二级价格、最终中标率和自动发行小结。</small></span>
+            <span><strong>拖入或点击上传“新债发行-日期.xlsx”</strong><small>转换后将在下方显示债券代码、期限、比较基准、二级价格、最终中标率和自动发行小结。</small></span>
           </button> : <>
             <div className="comment-toolbar comment-entry-toolbar">
               <div><Check/><span><small>当日填写区</small><strong>{commentPlanFileName} · 全部 {commentDrafts.length} 只政金债</strong></span></div>
               <label><span>发行日期</span><select value={effectiveCommentDate} onChange={event => setCommentSelectedDate(event.target.value)}>{commentDates.map(date => <option key={date} value={date}>{date}</option>)}</select></label>
-              <span className="comment-progress">当日已完成 <strong>{completedComments.length}</strong> / {visibleCommentResults.length}</span>
-              <button className="range-generate" onClick={copyAllComments} disabled={!completedComments.length}><Copy/>复制当日小结</button>
+              <span className="comment-progress">已完成 <strong>{completedComments.length}</strong> / {visibleCommentResults.length} · 已勾选 <strong>{selectedCompletedComments.length}</strong></span>
+              <button className="range-generate" onClick={copySelectedComments} disabled={!selectedCompletedComments.length}><Copy/>复制已选{selectedCompletedComments.length ? `（${selectedCompletedComments.length}）` : ""}</button>
             </div>
             <div className="comment-audit"><Check/><span>代码末尾无 X/Z 的新券统一按收益率差计算，只写“今日新发”，不判断利差变化；增发 DR007/DR001 浮息债按净价差处理。</span></div>
             <div className="comment-entry-table-wrap"><table className="comment-entry-table">
-              <thead><tr><th>债券</th><th>发行类型</th><th>浮息类型</th><th>比较基准</th><th>二级收益率 / 净价</th><th>最终中标率 / 中标净价</th><th>自动文字详情</th></tr></thead>
+              <thead><tr><th className="comment-select-column"><input type="checkbox" aria-label="全选已完成的小结" checked={allCompletedSelected} disabled={!completedComments.length} onChange={toggleAllCompletedComments}/></th><th>债券</th><th>发行类型</th><th>浮息类型</th><th>比较基准</th><th>二级收益率 / 净价</th><th>最终中标率 / 中标净价</th><th>自动文字详情</th></tr></thead>
               <tbody>{visibleCommentResults.map(({ draft, comment, missing }) => {
                 const reopened = /[XZ]\d*$/i.test(draft.bondCode);
                 const drPricing = reopened && /^DR(?:001|007)?浮息债$/i.test(draft.rateType);
                 const benchmarkOptions = drPricing ? ["估价", "二级", "中间价"] : ["二级", "估值", "估值曲线", "中间价", "价格"];
-                return <tr key={draft.id}>
+                const selected = selectedCommentIds.includes(draft.id) && Boolean(comment);
+                return <tr key={draft.id} className={selected ? "comment-row-selected" : ""}>
+                  <td className="comment-select-column"><input type="checkbox" aria-label={`选择 ${draft.bondCode} 小结`} checked={selected} disabled={!comment} onChange={() => toggleCommentSelection(draft.id)}/></td>
                   <td><strong>{draft.tenor} {draft.bondCode}</strong><small>{draft.shortName}<br/>{draft.tradeDate}</small></td>
                   <td><span className={`comment-kind ${reopened ? "comment-kind-reopened" : "comment-kind-new"}`}>{reopened ? "增发券" : "新券"}</span></td>
                   <td><select aria-label={`${draft.bondCode} 浮息类型`} value={draft.rateType} onChange={event => updateCommentDraft(draft.id,"rateType",event.target.value)}>{POLICY_FLOAT_RATE_OPTIONS.map(option => <option key={option || "empty"} value={option}>{option || "空值"}</option>)}</select></td>
