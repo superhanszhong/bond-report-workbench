@@ -28,8 +28,13 @@ export type PolicyCommentDraft = {
   rateType: string;
   route: string;
   benchmarkType: string;
+  referenceBond?: string;
   benchmarkValue: string;
   finalValue: string;
+  sequenceCheck?: {
+    status: "ok" | "warning" | "unavailable";
+    message: string;
+  };
 };
 
 export const POLICY_FLOAT_RATE_OPTIONS = ["", "LPR浮息债", "DR007浮息债", "DR001浮息债"] as const;
@@ -71,7 +76,8 @@ function isReopenedBondCode(code = "") {
 
 function displayBondCode(code = "") {
   const clean = code.replace(/\.(?:IB|SH|SZ)$/i, "");
-  return /^09/.test(clean) ? clean : clean.replace(/Z(\d*)$/i, "X$1");
+  if (/^09/.test(clean)) return clean;
+  return clean.replace(/[XZ]1$/i, "X").replace(/Z(\d*)$/i, "X$1");
 }
 
 function issuerLabel(row: ParsedBondRecord) {
@@ -192,6 +198,7 @@ function ordinaryComment(row: ParsedBondRecord, records: ParsedBondRecord[]): Po
   const previousText = normalized(previous?.auctionSpreadText || "");
   const previousValue = bpValue(previousText);
   const compare = comparison(currentText, meta?.secondaryText || "");
+  const comparisonPrefix = /^(?:二级|估值曲线|估值|估价|中间价|价格|曲线)$/.test(compare.label) ? "" : "较";
   const side = current === null ? "" : current > 0 ? "高" : current < 0 ? "低" : "平";
   const resultLabel = (meta?.route || row.issuanceRoute) === "报价发行" ? "报价利率" : "中标利率";
   const winning = percentNumber(meta?.winningRateText || "");
@@ -199,8 +206,8 @@ function ordinaryComment(row: ParsedBondRecord, records: ParsedBondRecord[]): Po
   const firstLine = current === null
     ? "缺少中标利差，无法生成"
     : current === 0
-      ? `${resultPrefix} 平${compare.label}${compare.quote ? `(${compare.quote})` : ""}`
-      : `${resultPrefix} ${side}${compare.label}${compare.quote ? `(${compare.quote})` : ""}${Math.abs(current).toFixed(2)}BP`;
+      ? `${resultPrefix} 平${comparisonPrefix}${compare.label}${compare.quote ? `(${compare.quote})` : ""}`
+      : `${resultPrefix} ${side}${comparisonPrefix}${compare.label}${compare.quote ? `(${compare.quote})` : ""}${Math.abs(current).toFixed(2)}BP`;
   const movement = !reopened ? "不判断" : current !== null && previousValue !== null ? direction(previousValue, current) : "待确认";
   const secondLine = reopened
     ? `${issueDescription(row)},利差${movement}(${previousText ? `上次${previousText}` : "暂无上次同券发行记录"})`
@@ -282,6 +289,37 @@ function benchmarkKind(text = "", dr = false) {
   return dr ? "估价" : "二级";
 }
 
+function issueSequence(code = "") {
+  const clean = code.replace(/\.(?:IB|SH|SZ)$/i, "");
+  const match = clean.match(/[XZ](\d*)$/i);
+  return match ? Number(match[1] || 1) : null;
+}
+
+function sequenceCheck(row: ParsedBondRecord, history: ParsedBondRecord[]): NonNullable<PolicyCommentDraft["sequenceCheck"]> {
+  const currentSequence = issueSequence(row.bondCode || "");
+  if (currentSequence === null) return { status: "unavailable", message: "首发券，无需核对增发期数" };
+  const base = baseBondCode(row.bondCode || "");
+  const candidates = history.map((candidate) => ({
+    row: candidate,
+    sequence: baseBondCode(candidate.bondCode || "") === base
+      ? (issueSequence(candidate.bondCode || "") ?? 0)
+      : null,
+  })).filter((candidate): candidate is { row: ParsedBondRecord; sequence: number } => (
+    candidate.sequence !== null
+    && candidate.sequence < currentSequence
+    && candidate.row.tradeDate <= row.tradeDate
+  )).sort((a, b) => b.sequence - a.sequence || b.row.tradeDate.localeCompare(a.row.tradeDate));
+  const previous = candidates[0];
+  if (!previous) return { status: "unavailable", message: currentSequence === 1 ? "未找到首发券，需人工核对" : `未找到第${currentSequence - 1}期，需人工核对` };
+  if (previous.sequence === currentSequence - 1) {
+    return { status: "ok", message: `期数已核对：承接${displayBondCode(previous.row.bondCode || "首发券")}` };
+  }
+  return {
+    status: "warning",
+    message: `期数可能跳号：历史最近${displayBondCode(previous.row.bondCode || "首发券")}，本次${displayBondCode(row.bondCode || "")}`,
+  };
+}
+
 function latestSameBond(row: ParsedBondRecord, history: ParsedBondRecord[]) {
   const base = baseBondCode(row.bondCode || "");
   return history.filter((candidate) => candidate.tradeDate <= row.tradeDate && baseBondCode(candidate.bondCode || "") === base)
@@ -313,6 +351,7 @@ export function createPolicyCommentDrafts(planRecords: ParsedBondRecord[], histo
     const rateType = previousDraft?.rateType ?? historicalRateType(row, history);
     const drPricing = isReopenedBondCode(row.bondCode || "") && /^DR(?:001|007)?浮息债$/i.test(rateType);
     const previousText = previous?.summaryMeta?.auctionSpreadText || previous?.summaryMeta?.displaySpreadText || "";
+    const nextBenchmarkType = previousDraft?.benchmarkType || benchmarkKind(previousText, drPricing);
     const raw = row.raw || {};
     return {
       id,
@@ -324,9 +363,11 @@ export function createPolicyCommentDrafts(planRecords: ParsedBondRecord[], histo
       tenor: tenorLabel(row.tenor || ""),
       rateType,
       route: row.issuanceRoute || "中债招标",
-      benchmarkType: previousDraft?.benchmarkType || benchmarkKind(previousText, drPricing),
+      benchmarkType: nextBenchmarkType,
+      referenceBond: previousDraft?.referenceBond || "",
       benchmarkValue: previousDraft?.benchmarkValue || "",
       finalValue: previousDraft?.finalValue || (drPricing ? "" : inputRate(raw.加权利率 ?? raw.发行利率)),
+      sequenceCheck: sequenceCheck(row, history),
     } satisfies PolicyCommentDraft;
   });
 }
@@ -342,12 +383,17 @@ function draftRecord(draft: PolicyCommentDraft): ParsedBondRecord | null {
   if (dr) {
     const difference = Number((finalValue - benchmarkValue).toFixed(4));
     const side = difference > 0 ? "高" : difference < 0 ? "低" : "平";
-    const label = `${draft.benchmarkType.replace(/净价$/, "")}净价`;
+    const referenceBond = draft.referenceBond?.trim() || "";
+    const referenceCode = referenceBond.replace(/(?:二级|估值曲线|估值|估价|中间价|价格|曲线|净价)$/, "").trim();
+    const label = `${referenceCode ? `较${referenceCode}` : ""}${draft.benchmarkType.replace(/净价$/, "")}净价`;
     auctionSpreadText = `${side}${label}(${compactNumber(benchmarkValue, 4)})${compactNumber(Math.abs(difference), 4)}元`;
     allInText = `${compactNumber(finalValue, 4)}元`;
   } else {
     const difference = Number(((finalValue - benchmarkValue) * 100).toFixed(2));
-    auctionSpreadText = `${difference > 0 ? "+" : ""}${difference.toFixed(2)}(较${draft.benchmarkType}(${compactNumber(benchmarkValue, 4)}))`;
+    const referenceBond = draft.referenceBond?.trim() || "";
+    const referenceCode = referenceBond.replace(/(?:二级|估值曲线|估值|估价|中间价|价格|曲线)$/, "").trim();
+    const comparisonLabel = referenceCode ? `${referenceCode}${draft.benchmarkType}` : draft.benchmarkType;
+    auctionSpreadText = `${difference > 0 ? "+" : ""}${difference.toFixed(2)}(较${comparisonLabel}(${compactNumber(benchmarkValue, 4)}))`;
   }
   return {
     tradeDate: draft.tradeDate,

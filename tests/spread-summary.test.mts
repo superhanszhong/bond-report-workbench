@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { rollingSpreadAnalysis, spreadSummary, type ParsedBondRecord } from "../app/lib/workbench.ts";
+import { rollingSpreadAnalysis, spreadSummary, spreadValueForMetric, type ParsedBondRecord } from "../app/lib/workbench.ts";
 
 const meta = (previous?: ParsedBondRecord["summaryMeta"]["previous"]) => ({
   baseCode: "2600006", route: "中债招标", rateType: "固息或贴现",
@@ -55,10 +55,20 @@ test("compares same issuer and tenor against a rolling four-week average", () =>
   ];
   const result = rollingSpreadAnalysis(current, [...history, ...current], "2026-08-31", "2026-09-04");
   assert.equal(result.comparableGroups, 2);
-  assert.equal(result.normalGroups, 1);
-  assert.equal(result.notableGroups, 1);
+  assert.equal(result.normalGroups, 0);
+  assert.equal(result.notableGroups, 2);
   assert.equal(result.specialBonds, 1);
-  assert.match(result.text, /农发债3Y平均利差由前四周-2\.00BP变为本期-4\.00BP，下行2\.00BP/);
-  assert.match(result.text, /国开债5Y\+?-0\.20BP|国开债5Y-0\.20BP/);
-  assert.match(result.text, /特殊债券发行汇总.*25农发09/);
+  assert.match(result.text, /突出变化：.*农发债3Y由-2\.00BP变为-4\.00BP，下行2\.00BP/);
+  assert.match(result.text, /横向表现：国开债5Y平均利差最高（-0\.20BP）/);
+  assert.match(result.text, /单券明细：.*26农发05（260405X5）-4\.00BP，较四周均值下行2\.00BP/);
+  assert.match(result.text, /特殊债券：.*25农发09/);
+});
+
+test("supports all-in and winning spread metrics from one primary-secondary record", () => {
+  const row: ParsedBondRecord = {
+    tradeDate: "2026-09-01", bondCode: "260308X2", bondType: "口行债", tenor: "1Y", spread: -3.5,
+    raw: { 中标利率: 1.3801, 综收: 1.385, 二级: 1.42, 招标利差: -3.99 },
+  };
+  assert.equal(spreadValueForMetric(row, "all_in"), -3.5);
+  assert.equal(spreadValueForMetric(row, "winning"), -3.99);
 });

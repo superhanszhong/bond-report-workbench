@@ -70,6 +70,16 @@ test("DR001 增发券按净价差生成文字", () => {
   assert.equal(result.text, "中标净价99.9639元 高估价净价(99.95)0.0139元\n今日增发农发清发2Y DR001浮息债,利差走阔(上次高估价净价0.0009元)");
 });
 
+test("DR 净价债也可填写参考券", () => {
+  const draft: PolicyCommentDraft = {
+    id: "2026-09-01|09260409Z21", tradeDate: "2026-09-01", bondCode: "09260409Z21", shortName: "26农发清发09(增发21)",
+    issuer: "中国农业发展银行", bondType: "农发债", tenor: "2Y", rateType: "DR007浮息债", route: "上清所",
+    benchmarkType: "二级", referenceBond: "260214", benchmarkValue: "99.9775", finalValue: "99.9767",
+  };
+  const result = policyDraftResults([draft], [])[0].comment!;
+  assert.match(result.firstLine, /低较260214二级净价\(99\.9775\)0\.0008元/);
+});
+
 test("DR 增发券的上次记录若只有收益率差，不误判为净价差", () => {
   const prior = history("260217", "2026-08-11", "-1.36(较260214估值(1.5036))", "DR浮息债");
   const draft: PolicyCommentDraft = {
@@ -104,6 +114,60 @@ test("历史备注将 DR01 归一为 DR001，将普通 DR 浮息债归一为 DR0
   ];
   const drafts = createPolicyCommentDrafts(plans, histories);
   assert.deepEqual(drafts.map((draft) => draft.rateType), ["DR001浮息债", "DR007浮息债"]);
+});
+
+test("参考券默认留空，仅在手动填写后按参考收益率生成小结", () => {
+  const plan: ParsedBondRecord = {
+    tradeDate: "2026-08-25", bondCode: "260217Z2", shortName: "26国开清发17(增发2)",
+    issuer: "国家开发银行", bondType: "国开债", tenor: "3Y",
+  };
+  const prior = {
+    ...history("260217Z1", "2026-08-18", "-1.36(较260214估值(1.5036))"),
+    issuer: "国家开发银行", bondType: "国开债",
+  };
+  const [draft] = createPolicyCommentDrafts([plan], [prior]);
+  assert.equal(draft.benchmarkType, "估值");
+  assert.equal(draft.referenceBond, "");
+  const [result] = policyDraftResults([{ ...draft, referenceBond: "260214", benchmarkValue: "1.5036", finalValue: "1.49" }], [prior]);
+  assert.match(result.comment!.firstLine, /低较260214估值\(1\.5036\)1\.36BP/);
+});
+
+test("参考券留空时默认按本券基准生成，不增加额外处理", () => {
+  const draft: PolicyCommentDraft = {
+    id: "2026-09-01|260308X2", tradeDate: "2026-09-01", bondCode: "260308X2", shortName: "26进出08(增发2)",
+    issuer: "中国进出口银行", bondType: "口行债", tenor: "1Y", rateType: "", route: "中债招标",
+    benchmarkType: "二级", referenceBond: "", benchmarkValue: "1.42", finalValue: "1.3801",
+  };
+  const result = policyDraftResults([draft], [])[0];
+  assert.deepEqual(result.missing, []);
+  assert.match(result.comment!.firstLine, /低二级\(1\.42\)3\.99BP/);
+});
+
+test("短评核对增发期数并提示跳号", () => {
+  const plans: ParsedBondRecord[] = [
+    { tradeDate: "2026-09-01", bondCode: "260308X2", issuer: "中国进出口银行", bondType: "口行债", tenor: "1Y" },
+    { tradeDate: "2026-09-01", bondCode: "260405X6", issuer: "中国农业发展银行", bondType: "农发债", tenor: "5Y" },
+  ];
+  const histories = [
+    { ...history("260308Z1", "2026-08-25", "-1.00(较二级(1.4))"), issuer: "中国进出口银行", bondType: "口行债" },
+    history("260405Z3", "2026-08-25", "-1.00(较二级(1.5))"),
+  ];
+  const drafts = createPolicyCommentDrafts(plans, histories);
+  assert.equal(drafts[0].sequenceCheck?.status, "ok");
+  assert.match(drafts[0].sequenceCheck?.message || "", /260308X(?:\D|$)/);
+  assert.equal(drafts[1].sequenceCheck?.status, "warning");
+  assert.match(drafts[1].sequenceCheck?.message || "", /跳号/);
+});
+
+test("首期增发代码 X1 按市场习惯显示为 X，X 仍识别为第一期", () => {
+  const first = current("260308X1", "1", "2026-08-25", "-1.00(较二级(1.4))", "1.39%", "1.4%");
+  const comments = policyComments([first], "2026-08-25");
+  assert.equal(comments[0].displayCode, "260308X");
+  const plan = { ...first, tradeDate: "2026-09-01", bondCode: "260309X2" };
+  const prior = { ...first, bondCode: "260309X" };
+  const [draft] = createPolicyCommentDrafts([plan], [prior]);
+  assert.equal(draft.sequenceCheck?.status, "ok");
+  assert.match(draft.sequenceCheck?.message || "", /260309X(?:\D|$)/);
 });
 
 test("同一基础代码一周多次发行时按日期和完整代码保留各自行情填写", () => {

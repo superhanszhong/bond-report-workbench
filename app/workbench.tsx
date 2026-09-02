@@ -7,7 +7,8 @@ import {
 } from "lucide-react";
 import {
   fridayOf, maturityDailyTotals, maturityKind, maturityWeekStart, mondayOf, parseIssuancePlanFile, parseLocalBondFile, parseMaturityFile,
-  isSpecialSpreadBond, parseSpreadFile, ParsedBondRecord, rateMaturityBreakdown, resolveSpreadBp, rollingSpreadAnalysis,
+  isSpecialSpreadBond, parseSpreadFile, ParsedBondRecord, rateMaturityBreakdown, recordsForSpreadMetric, resolveSpreadBp,
+  rollingSpreadAnalysis, SpreadMetric,
 } from "./lib/workbench";
 import { buildWeeklyReportBlob } from "./lib/report";
 import {
@@ -171,7 +172,7 @@ function niceStep(raw: number) {
   return nice * 10 ** exponent;
 }
 
-function SpreadChart({ records, svgRef, startDate, endDate }: { records: ParsedBondRecord[]; svgRef: React.RefObject<SVGSVGElement | null>; startDate: string; endDate: string }) {
+function SpreadChart({ records, svgRef, startDate, endDate, metricLabel }: { records: ParsedBondRecord[]; svgRef: React.RefObject<SVGSVGElement | null>; startDate: string; endDate: string; metricLabel: string }) {
   const issuerTypes = ["国债", "国开债", "口行债", "农发债"];
   const eligible = records.filter(row => issuerTypes.includes(row.bondType || "") && (() => {
     const day = new Date(`${row.tradeDate}T12:00:00`).getDay();
@@ -212,12 +213,12 @@ function SpreadChart({ records, svgRef, startDate, endDate }: { records: ParsedB
   const overlaps = (a: Box, b: Box) => a.x < b.x + b.w + 6 && a.x + a.w + 6 > b.x && a.y < b.y + b.h + 6 && a.y + a.h + 6 > b.y;
   const callouts = [...points.filter(row => Number(row.spread) > 0).sort((a, b) => Number(b.spread) - Number(a.spread)), ...points.filter(row => Number(row.spread) <= -1).sort((a, b) => Number(a.spread) - Number(b.spread))].map((row, labelIndex) => {
     const label = `${row.shortName || row.bondCode || ""}  ${Number(row.spread) > 0 ? "+" : ""}${Number(row.spread).toFixed(2)}bp`;
-    const w = Math.max(112, label.length * 9.5 + 20);
-    const h = 30;
+    const w = Math.max(132, label.length * 9.7 + 34);
+    const h = 36;
     const candidates: { x: number; y: number }[] = [];
     const sideFirst = (row.sourceIndex + labelIndex) % 2 === 0;
     for (let lane = 0; lane < 8; lane += 1) {
-      const vertical = 14 + lane * 34;
+      const vertical = 18 + lane * 40;
       const xs = sideFirst ? [row.cx + 16, row.cx - w - 16] : [row.cx - w - 16, row.cx + 16];
       xs.forEach(x => candidates.push({ x, y: row.cy - h - vertical }));
       [...xs].reverse().forEach(x => candidates.push({ x, y: row.cy + vertical }));
@@ -236,10 +237,18 @@ function SpreadChart({ records, svgRef, startDate, endDate }: { records: ParsedB
   return (
     <div className="chart-wrap">
       <svg ref={svgRef} className="spread-chart" viewBox="0 0 1680 1050" role="img" aria-label="本周国债、政金债发行一二级利差散点图">
+        <defs>
+          <filter id="bubble-shadow" x="-30%" y="-40%" width="160%" height="190%">
+            <feDropShadow dx="0" dy="4" stdDeviation="4" floodColor="#5C514B" floodOpacity=".16" />
+          </filter>
+        </defs>
         <rect width="1680" height="1050" fill="#fff" />
         <rect width="1680" height="96" fill="#FAE7DA" />
-        <text x="70" y="43" fontSize="34" fontWeight="700" fill="#9A5748">本周国债、政金债发行一二级利差散点图</text>
-        <text x="70" y="76" fontSize="20" fill="#6B6662">交易日：{startDate} 至 {endDate}｜利差口径：综收－二级（bp）｜散点口径：单券</text>
+        <text x="70" y="43" fontSize="32" fontWeight="700" fill="#9A5748">本周国债、政金债发行一二级利差散点图</text>
+        <text x="70" y="76" fontSize="19" fill="#6B6662">交易日：{startDate} 至 {endDate}｜利差口径：{metricLabel}（bp）｜散点口径：单券</text>
+        <svg x="1238" y="14" width="370" height="70" viewBox="970 350 1950 370" preserveAspectRatio="xMidYMid meet" aria-label="东方证券 FICC">
+          <image data-chart-logo="true" href={`${ASSET_BASE}orient-ficc-logo.png`} width="3878" height="1071" />
+        </svg>
         <text x="70" y="140" fontSize="22" fill="#68717b">普通债券样本 <tspan fontSize="26" fontWeight="700" fill="#D28A4D">{normalized.length}只</tspan> | 正利差债券 <tspan fontSize="26" fontWeight="700" fill="#D28A4D">{normalized.filter(r => Number(r.spread) > 0).length}只</tspan> | 平均利差 <tspan fontSize="26" fontWeight="700" fill="#D28A4D">{avg.toFixed(2)}bp</tspan> | 已排除特殊债券 <tspan fontSize="26" fontWeight="700" fill="#D28A4D">{excluded.length}只</tspan></text>
         <rect x={chartLeft} y={chartTop} width={chartRight-chartLeft} height={Math.max(0, y(0)-chartTop)} fill="#FFFCFA" />
         {ticks.map((tick) => (
@@ -259,12 +268,13 @@ function SpreadChart({ records, svgRef, startDate, endDate }: { records: ParsedB
           </g>;
         })}
         {callouts.map(({ row, label, box }, index) => <g key={`callout-${row.bondCode}-${index}`}>
-          <line x1={row.cx} y1={row.cy} x2={box.x+box.w/2} y2={box.y+box.h/2} stroke={darkColors[tone(row.bondType || "")]} strokeWidth="1.2" opacity=".75"/>
-          <rect x={box.x} y={box.y} width={box.w} height={box.h} rx="7" fill={colors[tone(row.bondType || "")]} fillOpacity=".92" stroke={darkColors[tone(row.bondType || "")]} strokeWidth="1"/>
-          <text x={box.x+box.w/2} y={box.y+20} textAnchor="middle" fontSize="18" fontWeight="700" fill="#3F3F3F">{label}</text>
+          <path d={`M ${row.cx} ${row.cy} Q ${(row.cx + box.x + box.w / 2) / 2} ${row.cy - 10} ${box.x + box.w / 2} ${box.y + box.h / 2}`} fill="none" stroke={darkColors[tone(row.bondType || "")]} strokeWidth="1.5" opacity=".7"/>
+          <rect x={box.x} y={box.y} width={box.w} height={box.h} rx="16" fill="#FFFFFF" stroke={darkColors[tone(row.bondType || "")]} strokeWidth="1.2" filter="url(#bubble-shadow)"/>
+          <circle cx={box.x+16} cy={box.y+box.h/2} r="5" fill={colors[tone(row.bondType || "")]} stroke={darkColors[tone(row.bondType || "")]} strokeWidth="1.3"/>
+          <text x={box.x+29} y={box.y+24} fontSize="17" fontWeight="700" fill="#3F3F3F">{label}</text>
         </g>)}
         <text x="860" y="950" textAnchor="middle" fontSize="21" fontWeight="600" fill="#626a73">发行期限</text>
-        <text x="25" y="535" transform="rotate(-90 25 535)" textAnchor="middle" fontSize="21" fontWeight="600" fill="#626a73">综收－二级（bp）</text>
+        <text x="25" y="535" transform="rotate(-90 25 535)" textAnchor="middle" fontSize="21" fontWeight="600" fill="#626a73">{metricLabel}（bp）</text>
         {[["国债","#F4CDC3"],["国开债","#FAE1CC"],["口行债","#E5E5E3"],["农发债","#D6EFF5"]].map(([label,color],i) => <g key={label} transform={`translate(${485+i*190},1005)`}><circle r="11" fill={color}/><text x="22" y="7" fontSize="24" fontWeight="700" fill="#555b63">{label}</text></g>)}
       </svg>
       {!normalized.length && <div className="chart-empty">上传一二级表后，这里按所选区间生成利差图</div>}
@@ -287,6 +297,8 @@ export default function Workbench() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [dragging, setDragging] = useState<DatasetType | null>(null);
+  const [homeDragActive, setHomeDragActive] = useState(false);
+  const [spreadMetric, setSpreadMetric] = useState<SpreadMetric>("all_in");
   const [analysisStart, setAnalysisStart] = useState(() => mondayOf(new Date()));
   const [analysisEnd, setAnalysisEnd] = useState(() => fridayOf(mondayOf(new Date())));
   const [chartRange, setChartRange] = useState(() => ({ start: mondayOf(new Date()), end: fridayOf(mondayOf(new Date())) }));
@@ -298,10 +310,9 @@ export default function Workbench() {
   const [commentPlanRecords, setCommentPlanRecords] = useState<ParsedBondRecord[]>([]);
   const [commentDrafts, setCommentDrafts] = useState<PolicyCommentDraft[]>([]);
   const [commentPlanFileName, setCommentPlanFileName] = useState("");
-  const [commentHistoryFileName, setCommentHistoryFileName] = useState("");
   const [commentSelectedDate, setCommentSelectedDate] = useState("");
   const [selectedCommentIds, setSelectedCommentIds] = useState<string[]>([]);
-  const [commentDragTarget, setCommentDragTarget] = useState<"plan" | "history" | null>(null);
+  const [commentDragTarget, setCommentDragTarget] = useState<"plan" | null>(null);
   const [commentLoading, setCommentLoading] = useState(false);
   const [chartLoading, setChartLoading] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
@@ -309,10 +320,10 @@ export default function Workbench() {
   const [reportDownload, setReportDownload] = useState<{ url: string; name: string } | null>(null);
   const [latestDates, setLatestDates] = useState<LatestDates>({});
   const spreadInput = useRef<HTMLInputElement>(null);
+  const smartInput = useRef<HTMLInputElement>(null);
   const maturityInput = useRef<HTMLInputElement>(null);
   const issuancePlanInput = useRef<HTMLInputElement>(null);
   const commentPlanInput = useRef<HTMLInputElement>(null);
-  const commentHistoryInput = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => () => {
@@ -331,21 +342,29 @@ export default function Workbench() {
   const latestIssuancePlanDate = latestDates.issuance_plan || "暂无数据";
   const rateMaturityRecords = maturityRecords.filter(row => maturityKind(row) === "rate");
   const localMaturityRecords = maturityRecords.filter(row => maturityKind(row) === "local");
+  const chartMetricRecords = useMemo(() => recordsForSpreadMetric(chartRecords, spreadMetric), [chartRecords, spreadMetric]);
+  const chartMetricAnalysisRecords = useMemo(() => recordsForSpreadMetric(chartAnalysisRecords, spreadMetric), [chartAnalysisRecords, spreadMetric]);
+  const spreadMetricLabel = spreadMetric === "all_in" ? "综收－二级" : "中标－二级";
   const chartAudit = useMemo(() => {
-    const supported = chartRecords.filter(row => ["国债", "国开债", "口行债", "农发债"].includes(row.bondType || ""));
+    const supported = chartMetricRecords.filter(row => ["国债", "国开债", "口行债", "农发债"].includes(row.bondType || ""));
     return {
       plotted: supported.filter(row => row.spread !== null && row.spread !== undefined && !isSpecialSpreadBond(row)).length,
       excluded: supported.filter(isSpecialSpreadBond).length,
       derived: supported.filter(row => ["derived_treasury", "recalculated"].includes(spreadAuditStatus(row))).length,
       missing: supported.filter(row => (row.spread === null || row.spread === undefined) && !isSpecialSpreadBond(row)).length,
     };
-  }, [chartRecords]);
+  }, [chartMetricRecords]);
   const rollingAnalysis = useMemo(
-    () => rollingSpreadAnalysis(chartRecords, chartAnalysisRecords, chartRange.start, chartRange.end),
-    [chartRecords, chartAnalysisRecords, chartRange],
+    () => rollingSpreadAnalysis(chartMetricRecords, chartMetricAnalysisRecords, chartRange.start, chartRange.end),
+    [chartMetricRecords, chartMetricAnalysisRecords, chartRange],
   );
   const legacySpreadData = spreadRecords.length > 0 && spreadRecords.some((row) => !row.summaryMeta);
-  const commentHistorySource = commentHistoryRecords.length ? commentHistoryRecords : historicalSpreadRecords;
+  const commentHistorySource = useMemo(() => {
+    const merged = new Map<string, ParsedBondRecord>();
+    [...historicalSpreadRecords, ...commentHistoryRecords].forEach((row) => merged.set(`${row.tradeDate}|${row.bondCode || row.shortName || ""}`, row));
+    return [...merged.values()].sort((a, b) => `${a.tradeDate}|${a.bondCode || ""}`.localeCompare(`${b.tradeDate}|${b.bondCode || ""}`));
+  }, [historicalSpreadRecords, commentHistoryRecords]);
+  const commentHistoryLatestDate = commentHistorySource.map((row) => row.tradeDate).sort().at(-1) || latestDates.spread || "暂无数据";
   const commentResults = useMemo(() => policyDraftResults(commentDrafts, commentHistorySource), [commentDrafts, commentHistorySource]);
   const commentDates = useMemo(() => [...new Set(commentDrafts.map((draft) => draft.tradeDate))].sort(), [commentDrafts]);
   const effectiveCommentDate = commentDates.includes(commentSelectedDate) ? commentSelectedDate : commentDates.at(-1) || "";
@@ -399,7 +418,11 @@ export default function Workbench() {
       const parsed = type === "local_bond" ? await parseLocalBondFile(file)
         : type === "spread" ? await parseSpreadFile(file)
           : type === "maturity" ? await parseMaturityFile(file) : await parseIssuancePlanFile(file);
-      if (type === "spread") setSpreadSourceRecords(parsed);
+      if (type === "spread") {
+        setSpreadSourceRecords(parsed);
+        setCommentHistoryRecords(parsed);
+        if (commentPlanRecords.length) setCommentDrafts(createPolicyCommentDrafts(commentPlanRecords, [...historicalSpreadRecords, ...parsed], commentDrafts));
+      }
       const recordWeekOf = (row: ParsedBondRecord) => type === "maturity" ? maturityWeekStart(row.tradeDate) : mondayOf(row.tradeDate);
       const detectedWeeks = new Set(parsed.map(recordWeekOf));
       const isHistoricalBase = detectedWeeks.size > 1;
@@ -449,6 +472,34 @@ export default function Workbench() {
     if (file) void upload(file, type);
   }
 
+  function uploadDetectedFile(file: File) {
+    if (!/\.(?:xlsx|xlsm)$/i.test(file.name)) {
+      setMessage("请上传 .xlsx 或 .xlsm 文件");
+      return;
+    }
+    const name = file.name;
+    if (/地方政府债|地方债日表/.test(name)) {
+      setActive("local");
+      setMessage("地方债日表请在转换器中上传，文件仍只在浏览器本地处理");
+      return;
+    }
+    const detected: DatasetType | null = /到期|偿还/.test(name) ? "maturity"
+      : /新债发行|发行计划|招标计划/.test(name) ? "issuance_plan"
+        : /一二级|利差|短评/.test(name) ? "spread" : null;
+    if (!detected) {
+      setMessage("未能从文件名识别用途，请拖到对应的上传卡片");
+      return;
+    }
+    void upload(file, detected);
+  }
+
+  function dropHomepageFile(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setHomeDragActive(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) uploadDetectedFile(file);
+  }
+
   async function generateSpreadRange() {
     if (!analysisStart || !analysisEnd || analysisStart > analysisEnd) {
       setMessage("请选择有效的利差分析日期区间");
@@ -495,23 +546,7 @@ export default function Workbench() {
     }
   }
 
-  async function loadCommentHistoryFile(file: File) {
-    setCommentLoading(true);
-    setMessage(`正在读取历史库 ${file.name}…`);
-    try {
-      const parsed = await parseSpreadFile(file);
-      setCommentHistoryRecords(parsed);
-      setCommentHistoryFileName(file.name);
-      if (commentPlanRecords.length) setCommentDrafts(createPolicyCommentDrafts(commentPlanRecords, parsed, commentDrafts));
-      setMessage(`一二级利差历史库已切换：${parsed.length} 条记录`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "一二级利差历史库解析失败");
-    } finally {
-      setCommentLoading(false);
-    }
-  }
-
-  function dropCommentFile(event: React.DragEvent<HTMLElement>, target: "plan" | "history") {
+  function dropCommentFile(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     event.stopPropagation();
     setCommentDragTarget(null);
@@ -521,8 +556,7 @@ export default function Workbench() {
       setMessage("请拖入 .xlsx 或 .xlsm 文件");
       return;
     }
-    if (target === "plan") void loadCommentPlanFile(file);
-    else void loadCommentHistoryFile(file);
+    void loadCommentPlanFile(file);
   }
 
   function toggleCommentSelection(id: string) {
@@ -536,7 +570,7 @@ export default function Workbench() {
       : [...new Set([...current, ...completedIds])]);
   }
 
-  function updateCommentDraft(id: string, field: "rateType" | "benchmarkType" | "benchmarkValue" | "finalValue", value: string) {
+  function updateCommentDraft(id: string, field: "rateType" | "benchmarkType" | "referenceBond" | "benchmarkValue" | "finalValue", value: string) {
     setCommentDrafts((current) => current.map((draft) => {
       if (draft.id !== id) return draft;
       if (field !== "rateType") return { ...draft, [field]: value };
@@ -579,9 +613,25 @@ export default function Workbench() {
     if (response.ok) await loadWeek();
   }
 
-  function downloadChart() {
+  async function downloadChart() {
     if (!svgRef.current) return;
-    const xml = new XMLSerializer().serializeToString(svgRef.current);
+    const chart = svgRef.current.cloneNode(true) as SVGSVGElement;
+    const chartLogo = chart.querySelector("image[data-chart-logo]");
+    if (chartLogo) {
+      try {
+        const logoBlob = await fetch(`${ASSET_BASE}orient-ficc-logo.png`).then((response) => response.blob());
+        const logoDataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(logoBlob);
+        });
+        chartLogo.setAttribute("href", logoDataUrl);
+      } catch {
+        // The chart remains downloadable even if the logo asset cannot be embedded.
+      }
+    }
+    const xml = new XMLSerializer().serializeToString(chart);
     const blob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const image = new Image();
@@ -591,7 +641,7 @@ export default function Workbench() {
       canvas.toBlob((png) => {
         if (!png) return;
         const a = document.createElement("a"); a.href = URL.createObjectURL(png);
-        a.download = `国债政金债一二级利差_${chartRange.start}_${chartRange.end}.png`; a.click();
+        a.download = `国债政金债${spreadMetricLabel}_${chartRange.start}_${chartRange.end}.png`; a.click();
         URL.revokeObjectURL(a.href); URL.revokeObjectURL(url);
       }, "image/png");
     };
@@ -660,6 +710,16 @@ export default function Workbench() {
         </header>
 
         {message && <div className={`notice ${/失败|缺少|没有/.test(message) ? "notice-error" : ""}`}><CircleAlert size={17}/>{message}<button onClick={() => setMessage("")}><X size={15}/></button></div>}
+
+        {active === "overview" && <button className={`home-smart-drop ${homeDragActive ? "drag-active" : ""}`}
+          onClick={() => smartInput.current?.click()}
+          onDragEnter={event => { event.preventDefault(); setHomeDragActive(true); }}
+          onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setHomeDragActive(true); }}
+          onDragLeave={() => setHomeDragActive(false)}
+          onDrop={dropHomepageFile}>
+          <Upload/><span><strong>拖入 Excel，自动识别文件用途</strong><small>支持一二级利差、新债发行计划和到期明细；也可点击选择文件</small></span><em>智能上传</em>
+          <input ref={smartInput} hidden type="file" accept=".xlsx,.xlsm" onChange={event => { const file = event.target.files?.[0]; if (file) uploadDetectedFile(file); event.currentTarget.value = ""; }}/>
+        </button>}
 
         {active === "overview" && <section className="hero-grid">
           <div className="upload-card">
@@ -741,6 +801,10 @@ export default function Workbench() {
             <label><span>开始日期</span><input type="date" value={analysisStart} onChange={event => setAnalysisStart(event.target.value)}/></label>
             <span className="range-divider">至</span>
             <label><span>结束日期</span><input type="date" value={analysisEnd} onChange={event => setAnalysisEnd(event.target.value)}/></label>
+            <div className="metric-toggle" aria-label="利差口径">
+              <span>利差口径</span>
+              <div><button className={spreadMetric === "all_in" ? "metric-active" : ""} onClick={() => setSpreadMetric("all_in")}>综收－二级</button><button className={spreadMetric === "winning" ? "metric-active" : ""} onClick={() => setSpreadMetric("winning")}>中标－二级</button></div>
+            </div>
             <button className="range-generate" onClick={generateSpreadRange} disabled={chartLoading}>{chartLoading ? <LoaderCircle className="spin"/> : <BarChart3/>}生成图表</button>
             <p>当前区间：{chartRange.start} 至 {chartRange.end} · {chartRecords.length} 条记录</p>
           </div>
@@ -750,10 +814,10 @@ export default function Workbench() {
             <span>自动复算 <strong>{chartAudit.derived}</strong></span>
             <span className={chartAudit.missing ? "audit-warning" : ""}>缺少可比值 <strong>{chartAudit.missing}</strong></span>
           </div>
-          <SpreadChart records={chartRecords} svgRef={svgRef} startDate={chartRange.start} endDate={chartRange.end}/>
+          <SpreadChart records={chartMetricRecords} svgRef={svgRef} startDate={chartRange.start} endDate={chartRange.end} metricLabel={spreadMetricLabel}/>
           <section className="rolling-analysis" aria-label="四周滚动利差分析">
             <div className="rolling-analysis-head">
-              <div><span className="section-label">FOUR-WEEK ROLLING</span><h3>同品种同期限四周滚动分析</h3><p>基准窗口：{rollingAnalysis.benchmarkStart} 至 {rollingAnalysis.benchmarkEnd} · 正常波动阈值 ±1.50BP</p></div>
+              <div><span className="section-label">FOUR-WEEK ROLLING</span><h3>同品种同期限四周滚动分析</h3><p>口径：{spreadMetricLabel} · 基准窗口：{rollingAnalysis.benchmarkStart} 至 {rollingAnalysis.benchmarkEnd} · 偏离阈值 ±0.60BP</p></div>
               <button className="secondary" onClick={() => void copyRollingAnalysis()} disabled={!rollingAnalysis.text}><Copy/>复制分析</button>
             </div>
             <div className="rolling-analysis-metrics">
@@ -768,46 +832,40 @@ export default function Workbench() {
 
         {active === "comment" && <section className="panel focus-panel comment-panel"
           onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
-          onDrop={event => dropCommentFile(event, "plan")}>
+          onDrop={dropCommentFile}>
           <div className="panel-head comment-panel-head">
             <div><span className="section-label">DAILY INPUT</span><h2>今日政金债填写区</h2><p>先上传“新债发行”Excel，系统只提取国开、口行和农发债。你填写比较基准与最终中标率后，发行小结会即时生成。</p></div>
             <button className="secondary" onClick={() => commentPlanInput.current?.click()} disabled={commentLoading}>{commentLoading ? <LoaderCircle className="spin"/> : <Upload/>}{commentPlanFileName ? "更换发行文件" : "上传新债发行"}</button>
           </div>
           <input ref={commentPlanInput} hidden type="file" accept=".xlsx,.xlsm" onChange={event => { const file = event.target.files?.[0]; if (file) void loadCommentPlanFile(file); event.currentTarget.value = ""; }}/>
-          <input ref={commentHistoryInput} hidden type="file" accept=".xlsx,.xlsm" onChange={event => { const file = event.target.files?.[0]; if (file) void loadCommentHistoryFile(file); event.currentTarget.value = ""; }}/>
           <div className="comment-source-grid">
             <button className={`comment-source-card comment-plan-source ${commentDragTarget === "plan" ? "drag-active" : ""}`} onClick={() => commentPlanInput.current?.click()} disabled={commentLoading}
               onDragEnter={event => { event.preventDefault(); setCommentDragTarget("plan"); }}
               onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
               onDragLeave={() => setCommentDragTarget(null)}
-              onDrop={event => dropCommentFile(event, "plan")}>
+              onDrop={dropCommentFile}>
               <FileSpreadsheet/><span><small>第一步 · 今日发行</small><strong>{commentPlanFileName || "上传新债发行 Excel"}</strong><em>{commentDrafts.length ? `已转换 ${commentDrafts.length} 只政金债` : "自动过滤地方债与信用债"}</em></span>
             </button>
-            <button className={`comment-source-card ${commentDragTarget === "history" ? "drag-active" : ""}`} onClick={() => commentHistoryInput.current?.click()} disabled={commentLoading}
-              onDragEnter={event => { event.preventDefault(); setCommentDragTarget("history"); }}
-              onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
-              onDragLeave={() => setCommentDragTarget(null)}
-              onDrop={event => dropCommentFile(event, "history")}>
-              <RefreshCw/><span><small>历史来源 · 同券回溯</small><strong>{commentHistoryFileName || "工作台一二级利差历史库"}</strong><em>{commentHistorySource.length ? `当前可用 ${commentHistorySource.length} 条记录` : "如历史库为空，可在此上传一二级利差 Excel"}</em></span>
-            </button>
+            <div className="comment-source-card comment-history-note">
+              <RefreshCw/><span><small>历史来源 · 首页统一管理</small><strong>一二级利差历史库</strong><em>最新日期 {commentHistoryLatestDate} · 当前可用 {commentHistorySource.length} 条记录</em></span>
+            </div>
           </div>
           {!commentDrafts.length ? <button className={`comment-drop ${commentDragTarget === "plan" ? "drag-active" : ""}`} onClick={() => commentPlanInput.current?.click()} disabled={commentLoading}
             onDragEnter={event => { event.preventDefault(); setCommentDragTarget("plan"); }}
             onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
             onDragLeave={() => setCommentDragTarget(null)}
-            onDrop={event => dropCommentFile(event, "plan")}>
+            onDrop={dropCommentFile}>
             {commentLoading ? <LoaderCircle className="spin"/> : <Upload/>}
             <span><strong>拖入或点击上传“新债发行-日期.xlsx”</strong><small>转换后将在下方显示债券代码、期限、比较基准、二级价格、最终中标率和自动发行小结。</small></span>
           </button> : <>
             <div className="comment-toolbar comment-entry-toolbar">
               <div><Check/><span><small>当日填写区</small><strong>{commentPlanFileName} · 全部 {commentDrafts.length} 只政金债</strong></span></div>
               <label><span>发行日期</span><select value={effectiveCommentDate} onChange={event => setCommentSelectedDate(event.target.value)}>{commentDates.map(date => <option key={date} value={date}>{date}</option>)}</select></label>
-              <span className="comment-progress">已完成 <strong>{completedComments.length}</strong> / {visibleCommentResults.length} · 已勾选 <strong>{selectedCompletedComments.length}</strong></span>
               <button className="range-generate" onClick={copySelectedComments} disabled={!selectedCompletedComments.length}><Copy/>复制已选{selectedCompletedComments.length ? `（${selectedCompletedComments.length}）` : ""}</button>
             </div>
             <div className="comment-audit"><Check/><span>代码末尾无 X/Z 的新券统一按收益率差计算，只写“今日新发”，不判断利差变化；增发 DR007/DR001 浮息债按净价差处理。</span></div>
             <div className="comment-entry-table-wrap"><table className="comment-entry-table">
-              <thead><tr><th className="comment-select-column"><input type="checkbox" aria-label="全选已完成的小结" checked={allCompletedSelected} disabled={!completedComments.length} onChange={toggleAllCompletedComments}/></th><th>债券</th><th>发行类型</th><th>浮息类型</th><th>比较基准</th><th>二级收益率 / 净价</th><th>最终中标率 / 中标净价</th><th>自动文字详情</th></tr></thead>
+              <thead><tr><th className="comment-select-column"><input type="checkbox" aria-label="全选已完成的小结" checked={allCompletedSelected} disabled={!completedComments.length} onChange={toggleAllCompletedComments}/></th><th>债券</th><th>发行类型</th><th>浮息类型</th><th>比较基准</th><th>参考券（选填）</th><th>二级收益率 / 净价</th><th>最终中标率 / 中标净价</th><th>自动文字详情</th></tr></thead>
               <tbody>{visibleCommentResults.map(({ draft, comment, missing }) => {
                 const reopened = /[XZ]\d*$/i.test(draft.bondCode);
                 const drPricing = reopened && /^DR(?:001|007)?浮息债$/i.test(draft.rateType);
@@ -815,10 +873,11 @@ export default function Workbench() {
                 const selected = selectedCommentIds.includes(draft.id) && Boolean(comment);
                 return <tr key={draft.id} className={selected ? "comment-row-selected" : ""}>
                   <td className="comment-select-column"><input type="checkbox" aria-label={`选择 ${draft.bondCode} 小结`} checked={selected} disabled={!comment} onChange={() => toggleCommentSelection(draft.id)}/></td>
-                  <td><strong>{draft.tenor} {draft.bondCode}</strong><small>{draft.shortName}<br/>{draft.tradeDate}</small></td>
+                  <td><strong>{draft.tenor} {draft.bondCode}</strong><small>{draft.shortName}<br/>{draft.tradeDate}</small>{draft.sequenceCheck && <span className={`sequence-check sequence-check-${draft.sequenceCheck.status}`}>{draft.sequenceCheck.message}</span>}</td>
                   <td><span className={`comment-kind ${reopened ? "comment-kind-reopened" : "comment-kind-new"}`}>{reopened ? "增发券" : "新券"}</span></td>
                   <td><select aria-label={`${draft.bondCode} 浮息类型`} value={draft.rateType} onChange={event => updateCommentDraft(draft.id,"rateType",event.target.value)}>{POLICY_FLOAT_RATE_OPTIONS.map(option => <option key={option || "empty"} value={option}>{option || "空值"}</option>)}</select></td>
                   <td><select aria-label={`${draft.bondCode} 比较基准`} value={draft.benchmarkType} onChange={event => updateCommentDraft(draft.id,"benchmarkType",event.target.value)}>{benchmarkOptions.map(option => <option key={option} value={option}>{option}</option>)}</select></td>
+                  <td><input aria-label={`${draft.bondCode} 参考券代码`} value={draft.referenceBond || ""} onChange={event => updateCommentDraft(draft.id,"referenceBond",event.target.value)} placeholder="留空为本券，如 260214"/></td>
                   <td><input aria-label={`${draft.bondCode} 二级收益率或净价`} inputMode="decimal" value={draft.benchmarkValue} onChange={event => updateCommentDraft(draft.id,"benchmarkValue",event.target.value)} placeholder={drPricing ? "如 99.9500" : "如 1.4730"}/></td>
                   <td><input aria-label={`${draft.bondCode} 最终中标率或中标净价`} inputMode="decimal" value={draft.finalValue} onChange={event => updateCommentDraft(draft.id,"finalValue",event.target.value)} placeholder={drPricing ? "中标净价" : "如 1.4381"}/></td>
                   <td className="comment-output-cell">{comment ? <><pre>{comment.text}</pre><div><span>{reopened ? `上次同券：${comment.previousCode || "未找到"}` : "新券：不做历史利差判断"}</span><button onClick={() => void copyComment(comment.text, comment.displayCode)}><Copy/>复制</button></div></> : <span className="comment-missing">待填写：{missing.join("、")}</span>}</td>
