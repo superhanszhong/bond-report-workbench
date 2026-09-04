@@ -57,22 +57,22 @@ export type SpreadAudit = {
 export type SpreadMetric = "all_in" | "winning";
 
 const LOCAL_ALIASES: Record<string, string[]> = {
-  招标日: ["招标日", "发行日", "发行日期"],
+  招标日: ["招标日", "发行日", "发行日期", "发行起始日"],
   招标时间: ["招标时间"],
   招标场所: ["招标场所", "招标系统"],
   债券代码: ["债券代码", "代码"],
   债券简称: ["债券简称", "简称"],
   类型: ["类型"],
   性质: ["性质"],
-  期限: ["期限"],
-  发行量: ["发行量(亿元)", "发行量(亿)", "发行量"],
+  期限: ["期限", "发行期限", "期限(年)"],
+  发行量: ["发行量(亿元)", "发行量(亿)", "发行量", "实际发行量(亿)", "实际发行量（亿）", "发行规模(亿元)", "发行规模（亿元）", "发行规模"],
   手续费: ["手续费(%)", "手续费"],
   财政部基准: ["财政部5日均值(%)", "财政部同期国债(5日)", "财政部基准"],
   加点: ["加点(bp)", "投标加点(bp)", "加点"],
   投标下限: ["投标下限", "投标下限(%)", "下限"],
   缴款日: ["缴款日", "分销日"],
   债券全称: ["债券全称", "全称"],
-  区域名称: ["区域名称", "地区"],
+  区域名称: ["区域名称", "地区", "所属区域"],
 };
 
 const ISSUER_MAP: Record<string, string> = {
@@ -268,10 +268,6 @@ function boundedSheetRows(sheet: XLSX.WorkSheet) {
   return XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: null, range });
 }
 
-function sheetRows(workbook: XLSX.WorkBook) {
-  return boundedSheetRows(workbook.Sheets[workbook.SheetNames[0]]);
-}
-
 function headerIndex(rows: unknown[][], aliases: Record<string, string[]>) {
   let bestRow = -1;
   let bestIndex: Record<string, number> = {};
@@ -358,42 +354,47 @@ function rateTypeFromRemark(remark: string) {
 
 export async function parseLocalBondFile(file: File) {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
-  const rows = sheetRows(workbook);
-  const { row: headerRow, index } = headerIndex(rows, LOCAL_ALIASES);
   const required = ["招标日", "债券代码", "债券简称", "期限", "发行量"];
-  const missing = required.filter((name) => index[name] === undefined);
-  if (headerRow < 0 || missing.length) throw new Error(`地方债表缺少：${missing.join("、")}`);
-
-  const records: ParsedBondRecord[] = [];
-  for (let r = headerRow + 1; r < rows.length; r += 1) {
-    const raw = rowObject(rows[r], index);
-    if (!clean(raw.债券代码)) continue;
-    const date = excelDate(raw.招标日);
-    if (!date) continue;
-    const spread = numberValue(raw.加点) || 0;
-    const benchmark = numberValue(raw.财政部基准);
-    const explicitFloor = numberValue(raw.投标下限);
-    const floorRate = benchmark === null ? explicitFloor : benchmark + spread / 100;
-    const fullName = clean(raw.债券全称);
-    const region = clean(raw.区域名称) || regionFromName(fullName);
-    records.push({
-      tradeDate: isoDate(date),
-      bondCode: clean(raw.债券代码).replace(/\.IB$/i, ""),
-      shortName: clean(raw.债券简称),
-      fullName,
-      region,
-      bondType: cleanBondType(fullName, `${clean(raw.性质)}${clean(raw.类型)}`, region),
-      venue: shortVenue(raw.招标场所),
-      bidTime: clean(raw.招标时间),
-      tenor: clean(raw.期限).replace(/Y$/i, ""),
-      amount: numberValue(raw.发行量),
-      floorRate,
-      fee: numberValue(raw.手续费),
-      distributionDate: isoDate(excelDate(raw.缴款日)),
-      raw,
-    });
+  const unique = new Map<string, ParsedBondRecord>();
+  for (const sheetName of workbook.SheetNames) {
+    const rows = boundedSheetRows(workbook.Sheets[sheetName]);
+    const { row: headerRow, index } = headerIndex(rows, LOCAL_ALIASES);
+    if (headerRow < 0 || required.some((name) => index[name] === undefined)) continue;
+    for (let r = headerRow + 1; r < rows.length; r += 1) {
+      const raw = Object.fromEntries(Object.entries(rowObject(rows[r], index)).map(([key, value]) => [key, value instanceof Date ? isoDate(value) : value]));
+      const bondCode = clean(raw.债券代码).replace(/\.(?:IB|SH|SZ)$/i, "");
+      if (!/^\d{6,9}$/.test(bondCode)) continue;
+      const date = excelDate(raw.招标日);
+      const amount = numberValue(raw.发行量);
+      if (!date || amount === null || amount < 0 || !clean(raw.期限)) {
+        throw new Error(`地方债 ${bondCode} 的发行日期、发行量或期限缺失/无效，请补全后上传`);
+      }
+      const spread = numberValue(raw.加点) || 0;
+      const benchmark = numberValue(raw.财政部基准);
+      const explicitFloor = numberValue(raw.投标下限);
+      const floorRate = benchmark === null ? explicitFloor : benchmark + spread / 100;
+      const fullName = clean(raw.债券全称);
+      const region = clean(raw.区域名称) || regionFromName(fullName);
+      unique.set(`${isoDate(date)}|${bondCode}`, {
+        tradeDate: isoDate(date),
+        bondCode,
+        shortName: clean(raw.债券简称),
+        fullName,
+        region,
+        bondType: cleanBondType(fullName, `${clean(raw.性质)}${clean(raw.类型)}`, region),
+        venue: shortVenue(raw.招标场所),
+        bidTime: clean(raw.招标时间),
+        tenor: clean(raw.期限).replace(/Y$/i, ""),
+        amount,
+        floorRate,
+        fee: numberValue(raw.手续费),
+        distributionDate: isoDate(excelDate(raw.缴款日)),
+        raw,
+      });
+    }
   }
-  if (!records.length) throw new Error("未读取到地方债发行明细");
+  const records = [...unique.values()];
+  if (!records.length) throw new Error(`未读取到地方债发行明细，请检查表头：${required.join("、")}`);
   records.sort((a, b) => `${a.tradeDate}${a.bidTime}${a.venue}`.localeCompare(`${b.tradeDate}${b.bidTime}${b.venue}`));
   return records;
 }

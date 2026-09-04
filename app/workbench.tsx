@@ -244,7 +244,7 @@ function SpreadChart({ records, svgRef, startDate, endDate, metricLabel }: { rec
         </defs>
         <rect width="1680" height="1050" fill="#fff" />
         <rect width="1680" height="96" fill="#FAE7DA" />
-        <text x="70" y="43" fontSize="32" fontWeight="700" fill="#9A5748">本周国债、政金债发行一二级利差散点图</text>
+        <text x="70" y="43" fontSize="29" fontWeight="700" fill="#9A5748">本周国债、政金债发行一二级利差散点图（{metricLabel === "综收－二级" ? "综收口径" : "中标口径"}）</text>
         <text x="70" y="76" fontSize="19" fill="#6B6662">交易日：{startDate} 至 {endDate}｜利差口径：{metricLabel}（bp）｜散点口径：单券</text>
         <svg x="1238" y="14" width="370" height="70" viewBox="970 350 1950 370" preserveAspectRatio="xMidYMid meet" aria-label="东方证券 FICC">
           <image data-chart-logo="true" href={`${ASSET_BASE}orient-ficc-logo.png`} width="3878" height="1071" />
@@ -317,9 +317,11 @@ export default function Workbench() {
   const [chartLoading, setChartLoading] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportStatus, setReportStatus] = useState("");
+  const [confirmedNoLocalWeek, setConfirmedNoLocalWeek] = useState("");
   const [reportDownload, setReportDownload] = useState<{ url: string; name: string } | null>(null);
   const [latestDates, setLatestDates] = useState<LatestDates>({});
   const spreadInput = useRef<HTMLInputElement>(null);
+  const localInput = useRef<HTMLInputElement>(null);
   const smartInput = useRef<HTMLInputElement>(null);
   const maturityInput = useRef<HTMLInputElement>(null);
   const issuancePlanInput = useRef<HTMLInputElement>(null);
@@ -338,6 +340,7 @@ export default function Workbench() {
   const weekEnd = fridayOf(weekStart);
   const spreadAmount = spreadRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
   const latestSpreadDate = latestDates.spread || "暂无数据";
+  const latestLocalDate = latestDates.local_bond || "暂无数据";
   const latestMaturityDate = latestDates.maturity || "暂无数据";
   const latestIssuancePlanDate = latestDates.issuance_plan || "暂无数据";
   const rateMaturityRecords = maturityRecords.filter(row => maturityKind(row) === "rate");
@@ -427,7 +430,7 @@ export default function Workbench() {
       const detectedWeeks = new Set(parsed.map(recordWeekOf));
       const isHistoricalBase = detectedWeeks.size > 1;
       const groups = new Map<string, ParsedBondRecord[]>();
-      if (isHistoricalBase) {
+      if (isHistoricalBase || type === "local_bond") {
         parsed.forEach((row) => {
           const recordWeek = recordWeekOf(row);
           groups.set(recordWeek, [...(groups.get(recordWeek) || []), row]);
@@ -460,8 +463,8 @@ export default function Workbench() {
       }
       await Promise.all(Array.from({ length: Math.min(6, entries.length) }, () => saveNext()));
       const result = `新增${added}条，更新${updated}条，保留${unchanged}条未变化记录`;
-      setMessage(isHistoricalBase ? `历史数据已保存至${LOCAL_STORAGE_MODE ? "当前浏览器" : "共享数据库"}：${groups.size} 个交易周，${result}` : `已入库：${result}`);
       await loadWeek();
+      setMessage(`已保存 ${groups.size} 个交易周：${result}${type === "local_bond" ? "。地方债明细已接入周报，可切换对应周查看" : ""}`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "上传失败"); }
   }
 
@@ -478,12 +481,8 @@ export default function Workbench() {
       return;
     }
     const name = file.name;
-    if (/地方政府债|地方债日表/.test(name)) {
-      setActive("local");
-      setMessage("地方债日表请在转换器中上传，文件仍只在浏览器本地处理");
-      return;
-    }
     const detected: DatasetType | null = /到期|偿还/.test(name) ? "maturity"
+      : /地方政府债|地方债/.test(name) ? "local_bond"
       : /新债发行|发行计划|招标计划/.test(name) ? "issuance_plan"
         : /一二级|利差|短评/.test(name) ? "spread" : null;
     if (!detected) {
@@ -649,6 +648,10 @@ export default function Workbench() {
   }
 
   async function exportDocx() {
+    if (!localRecords.length && confirmedNoLocalWeek !== weekStart) {
+      setReportStatus("请先上传本周地方债发行明细；若确无发行，请勾选确认后再生成，避免将缺失数据计为零。");
+      return;
+    }
     setReportLoading(true);
     setReportStatus("正在按今日 Word 母版填充数据…");
     try {
@@ -699,7 +702,7 @@ export default function Workbench() {
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand"><BrandLogo/><div className="brand-copy"><strong>利率债发行工作台</strong><small>Issuance Desk</small></div></div>
-        <nav>{tabGroups.map(group => <div className="nav-group" key={group.label}><span className="nav-group-label">{group.label}</span>{group.items.map(([key, label]) => <button key={key} className={active === key ? "nav-active" : ""} onClick={() => setActive(key)}>{key === "overview" ? <House/> : key === "local" ? <FileSpreadsheet/> : key === "spread" ? <BarChart3/> : <FileText/>}<span>{label}</span></button>)}</div>)}</nav>
+        <nav>{tabGroups.map(group => <div className="nav-group" key={group.label}><span className="nav-group-label">{group.label}</span>{group.items.map(([key, label]) => <button key={key} className={active === key ? "nav-active" : ""} onClick={() => setActive(key)}>{key === "overview" ? <House/> : key === "spread" ? <BarChart3/> : <FileText/>}<span>{label}</span></button>)}</div>)}</nav>
         <div className="side-note"><Check size={16}/><span>{LOCAL_STORAGE_MODE ? <>数据保存在当前浏览器<br/>换设备需重新上传</> : <>公开共享数据<br/>周度记录集中留存</>}</span></div>
       </aside>
 
@@ -717,7 +720,7 @@ export default function Workbench() {
           onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setHomeDragActive(true); }}
           onDragLeave={() => setHomeDragActive(false)}
           onDrop={dropHomepageFile}>
-          <Upload/><span><strong>拖入 Excel，自动识别文件用途</strong><small>支持一二级利差、新债发行计划和到期明细；也可点击选择文件</small></span><em>智能上传</em>
+          <Upload/><span><strong>拖入 Excel，自动识别文件用途</strong><small>支持地方债发行明细、一二级利差、新债发行计划和到期明细</small></span><em>智能上传</em>
           <input ref={smartInput} hidden type="file" accept=".xlsx,.xlsm" onChange={event => { const file = event.target.files?.[0]; if (file) uploadDetectedFile(file); event.currentTarget.value = ""; }}/>
         </button>}
 
@@ -727,10 +730,14 @@ export default function Workbench() {
             <div className="upload-actions">
               <div className="upload-lane">
                 <button
-                  className="drop-zone local-drop"
-                  onClick={() => setActive("local")}
-                ><FileSpreadsheet/><span><em>地方债板块</em><strong>地方债日表转换</strong><small>进入转换工具<br/>不上传、不保留历史</small></span></button>
-                <div className="latest-date"><Check/><span>浏览器本地处理</span><strong>进入转换器</strong></div>
+                  className={`drop-zone local-drop ${dragging === "local_bond" ? "drag-active" : ""}`}
+                  onClick={() => localInput.current?.click()}
+                  onDragEnter={event => { event.preventDefault(); setDragging("local_bond"); }}
+                  onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
+                  onDragLeave={() => setDragging(null)}
+                  onDrop={event => dropFile(event, "local_bond")}
+                ><FileSpreadsheet/><span><em>周报取数 · 增量更新</em><strong>地方债发行明细</strong><small>拖入或点击上传 Excel<br/>自动去重，保留历史并更新修订值</small></span></button>
+                <div className="latest-date"><CalendarDays/><span>地方债明细最新日期</span><strong>{latestLocalDate}</strong></div>
               </div>
               <div className="upload-lane">
                 <button
@@ -745,7 +752,9 @@ export default function Workbench() {
               </div>
             </div>
             <input ref={spreadInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"spread"); e.currentTarget.value=""; }}/>
-            <p>地方债转换仅在本地完成；一二级表是国债政金债发行量、利差图、四周滚动分析和每日招标结果的统一口径。</p>
+            <input ref={localInput} hidden type="file" accept=".xlsx,.xlsm" onChange={e => { const file=e.target.files?.[0]; if(file) void upload(file,"local_bond"); e.currentTarget.value=""; }}/>
+            <p>地方债明细用于周报发行统计；按发行日期和债券代码识别增量，重复上传不重复计量。一二级表提供国债政金债数据。</p>
+            <div className="converter-shortcut"><button className="secondary" onClick={() => setActive("local")}><FileSpreadsheet/>地方债日表转换</button><span>独立转换工具 · 不自动计入周报</span></div>
           </div>
           <div className="report-source-card">
             <div className="card-head"><div><span className="section-label">周报生成数据</span><h2>发行时段与到期明细</h2><p>发行Excel只补充上午/下午；到期Excel提供全部到期量、到期结构和净融资口径。</p></div><FileText/></div>
@@ -781,7 +790,7 @@ export default function Workbench() {
         {active === "overview" && <section className="overview-section">
           <div className="overview-heading"><span className="section-label">WEEKLY OVERVIEW</span><h2>本周发行与到期总览</h2></div>
           <div className="metrics">
-            <article><span>发行时段已补充</span><strong>{issuancePlanRecords.length}</strong><small>只 · 仅用于上午/下午</small></article>
+            <article><span>地方债发行量</span><strong>{localRecords.reduce((sum,row)=>sum+(row.amount||0),0).toFixed(2)}</strong><small>亿元 · {localRecords.length}条明细</small></article>
             <article><span>国债政金债发行量</span><strong>{spreadAmount.toFixed(2)}</strong><small>亿元 · 一二级表口径</small></article>
             <article><span>国债及政金债到期</span><strong>{rateMaturityRecords.reduce((sum,row)=>sum+(row.amount||0),0).toFixed(2)}</strong><small>亿元 · {rateMaturityRecords.length}条明细</small></article>
             <article><span>地方债到期</span><strong>{localMaturityRecords.reduce((sum,row)=>sum+(row.amount||0),0).toFixed(2)}</strong><small>亿元 · {localMaturityRecords.length}条明细</small></article>
@@ -790,7 +799,7 @@ export default function Workbench() {
 
         {active === "local" && <section className="converter-panel">
           <div className="converter-intro">
-            <div><span className="section-label">LOCAL CONVERTER</span><h2>地方债日表转换器</h2><p>拖入 DM 下载的“地方政府债+日期.xlsx”，自动下载每日发行计划并生成可复制文本。文件仅在浏览器本地处理。</p></div>
+            <div><span className="section-label">LOCAL CONVERTER</span><h2>地方债日表转换器</h2><p>拖入 DM 下载的“地方政府债+日期.xlsx”，自动下载每日发行计划并生成可复制文本。文件仅在浏览器本地处理；周报取数请另从首页上传地方债发行明细。</p></div>
           </div>
           <iframe className="converter-frame" title="地方债日表转换器" src={`${ASSET_BASE}local-bond-daily-converter.html`} />
         </section>}
@@ -888,8 +897,12 @@ export default function Workbench() {
         </section>}
 
         {active === "report" && <section className="report-panel focus-panel">
-          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>发行量、债券明细及每日发行结果以一二级表为准；四周滚动分析可在“一二级利差”页面查看和复制；新债发行Excel只补充上午/下午。</p>{!issuancePlanRecords.length && <p className="report-status report-status-error">请先在“周报生成数据”模块上传新债发行计划，系统才能准确区分上午和下午。</p>}{!maturityRecords.length && <p className="report-status report-status-error">请先上传本周到期明细，否则到期及净融资项目无法完整填充。</p>}{!spreadRecords.length && <p className="report-status report-status-error">请先上传一二级表，用于发行量、滚动分析和每日招标结果。</p>}{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}{reportDownload && <a className="report-download" href={reportDownload.url} download={reportDownload.name}><Download/>下载已生成周报</a>}</div>
-          <button onClick={exportDocx} disabled={reportLoading || !issuancePlanRecords.length || !maturityRecords.length || !spreadRecords.length}>{reportLoading ? <LoaderCircle className="spin"/> : <FileText/>}{reportLoading ? "生成中" : "生成 Word"}</button>
+          <div className="local-report-source">
+            <p>地方债发行取数：本周 {localRecords.length} 条明细，合计 {localRecords.reduce((sum,row)=>sum+(row.amount||0),0).toFixed(2)} 亿元。最新明细日期：{latestLocalDate}。</p>
+            {!localRecords.length && <><p className="report-status report-status-error">本周尚无地方债明细，请从首页上传。数据缺失不等于零发行。</p><label><input type="checkbox" checked={confirmedNoLocalWeek === weekStart} onChange={event => setConfirmedNoLocalWeek(event.target.checked ? weekStart : "")}/> 已核实本周确无地方债发行</label></>}
+          </div>
+          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>地方债发行量及分类统计取自首页上传的地方债发行明细；国债政金债发行量及招标结果取自一二级表；四周滚动分析可在“一二级利差”页面查看和复制；新债发行Excel只补充上午/下午。</p>{!issuancePlanRecords.length && <p className="report-status report-status-error">请先在“周报生成数据”模块上传新债发行计划，系统才能准确区分上午和下午。</p>}{!maturityRecords.length && <p className="report-status report-status-error">请先上传本周到期明细，否则到期及净融资项目无法完整填充。</p>}{!spreadRecords.length && <p className="report-status report-status-error">请先上传一二级表，用于发行量、滚动分析和每日招标结果。</p>}{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}{reportDownload && <a className="report-download" href={reportDownload.url} download={reportDownload.name}><Download/>下载已生成周报</a>}</div>
+          <button onClick={exportDocx} disabled={reportLoading || !issuancePlanRecords.length || !maturityRecords.length || !spreadRecords.length || (!localRecords.length && confirmedNoLocalWeek !== weekStart)}>{reportLoading ? <LoaderCircle className="spin"/> : <FileText/>}{reportLoading ? "生成中" : "生成 Word"}</button>
         </section>}
 
         {active === "overview" && <section className="panel compact-panel">

@@ -5,6 +5,24 @@ import JSZip from "jszip";
 import { buildWeeklyReportBlob } from "../app/lib/report.ts";
 import type { ParsedBondRecord } from "../app/lib/workbench.ts";
 
+test("weekly report includes local issuance totals and net financing from uploaded records", async () => {
+  const template = await readFile("public/templates/weekly-bond-report-template.docx");
+  const localRecords: ParsedBondRecord[] = [
+    { tradeDate: "2026-08-31", bondCode: "2671001", shortName: "26北京47", bondType: "一般债", tenor: "7", amount: 7.3 },
+    { tradeDate: "2026-09-04", bondCode: "2671002", shortName: "26北京48", bondType: "专项债", tenor: "10", amount: 10 },
+  ];
+  const blob = await buildWeeklyReportBlob({
+    weekStart: "2026-08-31", summary: "", localRecords, spreadRecords: [],
+    templateBytes: template.buffer.slice(template.byteOffset, template.byteOffset + template.byteLength) as ArrayBuffer,
+    maturity: { rateTotal: 0, rateBreakdown: "", localDaily: { "2026-08-31": 2 }, localTotal: 2 },
+  });
+  const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+  const xml = await zip.file("word/document.xml")!.async("string");
+  assert.match(xml, /本周地方债发行17\.3亿，净融资额15\.3亿/);
+  assert.match(xml, /地方债/);
+  assert.match(xml, />7\.3<\/w:t>/);
+});
+
 test("daily reviews flow continuously without forced page breaks", async () => {
   const template = await readFile("public/templates/weekly-bond-report-template.docx");
   const templateBytes = template.buffer.slice(template.byteOffset, template.byteOffset + template.byteLength) as ArrayBuffer;

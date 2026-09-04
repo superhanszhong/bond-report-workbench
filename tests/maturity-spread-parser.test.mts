@@ -1,8 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import XLSX from "xlsx-js-style";
-import { maturityDailyTotals, parseIssuancePlanFile, parseMaturityFile, rateMaturityBreakdown, resolveSpreadBp } from "../app/lib/workbench.ts";
+import { maturityDailyTotals, parseLocalBondFile, parseIssuancePlanFile, parseMaturityFile, rateMaturityBreakdown, resolveSpreadBp } from "../app/lib/workbench.ts";
 import { mergeIssuanceSessions, planSession } from "../app/lib/report.ts";
+import { mergeRecord } from "../app/lib/record-merge.ts";
+
+test("local issuance import reads multiple detail sheets and removes duplicate date/code rows", async () => {
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([["地方债说明"]]), "说明");
+  const header = ["发行起始日", "债券代码", "债券简称", "发行期限", "发行规模(亿元)", "债券全称", "所属区域"];
+  const first = [new Date(2026, 7, 31, 12), "2671001.IB", "26北京47", "7Y", 7.3, "2026年北京市政府一般债券", "北京"];
+  const second = ["2026/09/04", "2671002.SH", "26北京48", "10Y", 10, "2026年北京市政府专项债券", "北京"];
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([header, first]), "周一");
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([header, first, second]), "累计");
+  const rows = await parseLocalBondFile(new File([XLSX.write(book, {type: "array", bookType: "xlsx"})], "地方债发行明细.xlsx"));
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].bondCode, "2671001");
+  assert.equal(rows[1].bondCode, "2671002");
+  assert.equal(rows[0].tenor, "7");
+  assert.equal(rows[0].raw?.招标日, "2026-08-31");
+  const persisted = { ...rows[0], raw: undefined, raw_json: JSON.stringify(rows[0].raw) };
+  assert.equal(mergeRecord(rows[0], persisted).changed, false);
+  assert.equal(rows.reduce((sum, row) => sum + row.amount!, 0), 17.3);
+});
+
+test("local issuance import rejects missing amounts instead of treating them as zero", async () => {
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+    ["招标日", "债券代码", "债券简称", "期限", "发行量"],
+    ["2026/09/04", "2671001", "26北京47", "7", null],
+  ]), "地方债");
+  await assert.rejects(() => parseLocalBondFile(new File([XLSX.write(book, {type: "array", bookType: "xlsx"})], "地方债.xlsx")), /发行量.*无效/);
+});
 
 test("uses the supplied spread when it reconciles with all-in and secondary yields", () => {
   const result = resolveSpreadBp({
