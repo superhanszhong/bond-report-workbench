@@ -7,14 +7,15 @@ import {
 } from "lucide-react";
 import {
   fridayOf, maturityDailyTotals, maturityKind, maturityWeekStart, mondayOf, parseIssuancePlanFile, parseLocalBondFile, parseMaturityFile,
-  isSpecialSpreadBond, parseSpreadFile, ParsedBondRecord, rateMaturityBreakdown, recordsForSpreadMetric, resolveSpreadBp,
+  inferredRateType, isSpecialSpreadBond, parseSpreadFile, ParsedBondRecord, rateMaturityBreakdown, recordsForSpreadMetric, resolveSpreadBp,
   rollingSpreadAnalysis, SpreadMetric,
 } from "./lib/workbench";
-import { buildWeeklyReportBlob } from "./lib/report";
+import { buildWeeklyReportBlob, reportDataWarnings } from "./lib/report";
 import {
   createPolicyCommentDrafts, policyDraftResults, PolicyCommentDraft, POLICY_FLOAT_RATE_OPTIONS,
 } from "./lib/policy-comment";
 import { LOCAL_STORAGE_MODE, workbenchRequest } from "./lib/workbench-request";
+import { recordKey } from "./lib/record-merge";
 
 type StoredRecord = ParsedBondRecord & {
   id: number;
@@ -102,12 +103,13 @@ function normalize(row: StoredRecord): ParsedBondRecord {
   }
   const storedMeta = raw.__summaryMeta && typeof raw.__summaryMeta === "object"
     ? raw.__summaryMeta as ParsedBondRecord["summaryMeta"] : undefined;
+  const rateType = inferredRateType({ bondCode: row.bond_code || row.bondCode, remark: row.remark, summaryMeta: storedMeta });
   const fallbackRoute = row.remark && /报价发行|前台报价/.test(row.remark)
     ? "报价发行" : /^09/.test(row.bond_code || row.bondCode || "") ? "上清所" : (row.issuance_route || row.issuanceRoute);
   const spreadResolution = row.dataset_type === "spread" ? resolveSpreadBp({
     provided: raw["利差"] ?? row.spread,
     allIn: raw["综收"], secondary: raw["二级"], winningRate: raw["中标利率"],
-    issuer: row.issuer || "", remark: row.remark || "",
+    issuer: row.issuer || "", remark: `${row.remark || ""} ${rateType}`,
   }) : null;
   if (spreadResolution && !raw.__spreadAudit) raw = { ...raw, __spreadAudit: spreadResolution.audit };
   return {
@@ -123,12 +125,12 @@ function normalize(row: StoredRecord): ParsedBondRecord {
     bidTime: row.bid_time || row.bidTime,
     tenor: row.tenor,
     amount: row.amount,
-    spread: spreadResolution?.spread ?? row.spread,
+    spread: spreadResolution ? spreadResolution.spread : row.spread,
     floorRate: row.floor_rate ?? row.floorRate,
     fee: row.fee,
     distributionDate: row.distribution_date || row.distributionDate,
     remark: row.remark,
-    summaryMeta: storedMeta,
+    summaryMeta: storedMeta ? { ...storedMeta, rateType } : undefined,
     raw,
   };
 }
@@ -327,6 +329,7 @@ export default function Workbench() {
   const issuancePlanInput = useRef<HTMLInputElement>(null);
   const commentPlanInput = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const uploadInProgress = useRef(false);
 
   useEffect(() => () => {
     if (reportDownload) URL.revokeObjectURL(reportDownload.url);
@@ -337,6 +340,7 @@ export default function Workbench() {
   const spreadRecords = records.filter((_, i) => data.records[i]?.dataset_type === "spread");
   const maturityRecords = records.filter((_, i) => data.records[i]?.dataset_type === "maturity");
   const issuancePlanRecords = records.filter((_, i) => data.records[i]?.dataset_type === "issuance_plan");
+  const reportWarnings = reportDataWarnings(spreadRecords, issuancePlanRecords);
   const weekEnd = fridayOf(weekStart);
   const spreadAmount = spreadRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
   const latestSpreadDate = latestDates.spread || "暂无数据";
@@ -364,7 +368,7 @@ export default function Workbench() {
   const legacySpreadData = spreadRecords.length > 0 && spreadRecords.some((row) => !row.summaryMeta);
   const commentHistorySource = useMemo(() => {
     const merged = new Map<string, ParsedBondRecord>();
-    [...historicalSpreadRecords, ...commentHistoryRecords].forEach((row) => merged.set(`${row.tradeDate}|${row.bondCode || row.shortName || ""}`, row));
+    [...historicalSpreadRecords, ...commentHistoryRecords].forEach((row) => merged.set(recordKey(row), row));
     return [...merged.values()].sort((a, b) => `${a.tradeDate}|${a.bondCode || ""}`.localeCompare(`${b.tradeDate}|${b.bondCode || ""}`));
   }, [historicalSpreadRecords, commentHistoryRecords]);
   const commentHistoryLatestDate = commentHistorySource.map((row) => row.tradeDate).sort().at(-1) || latestDates.spread || "暂无数据";
@@ -416,6 +420,11 @@ export default function Workbench() {
   }, [weekStart]);
 
   async function upload(file: File, type: DatasetType) {
+    if (uploadInProgress.current) {
+      setMessage("上一份文件仍在保存，请完成后再上传下一份。");
+      return;
+    }
+    uploadInProgress.current = true;
     setMessage(`正在解析 ${file.name}…`);
     try {
       const parsed = type === "local_bond" ? await parseLocalBondFile(file)
@@ -461,11 +470,19 @@ export default function Workbench() {
           unchanged += payload.unchanged || 0;
         }
       }
-      await Promise.all(Array.from({ length: Math.min(6, entries.length) }, () => saveNext()));
+      const saved = await Promise.allSettled(Array.from({ length: Math.min(6, entries.length) }, () => saveNext()));
+      const failures = saved.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failures.length) {
+        await loadWeek();
+        throw new Error(`部分记录未能保存（已新增${added}条、更新${updated}条）。${failures.map(result => String(result.reason instanceof Error ? result.reason.message : result.reason)).join("；")}。请重新上传，已成功记录不会重复计入。`);
+      }
       const result = `新增${added}条，更新${updated}条，保留${unchanged}条未变化记录`;
       await loadWeek();
-      setMessage(`已保存 ${groups.size} 个交易周：${result}${type === "local_bond" ? "。地方债明细已接入周报，可切换对应周查看" : ""}`);
+      const sourceDates = parsed.map(row => row.tradeDate).sort();
+      const sourceTotal = parsed.reduce((sum, row) => sum + (row.amount || 0), 0);
+      setMessage(`已识别 ${parsed.length} 条，合计 ${Number(sourceTotal.toFixed(4))} 亿元，覆盖 ${sourceDates[0]} 至 ${sourceDates.at(-1)}。已保存 ${groups.size} 个交易周：${result}${type === "local_bond" ? "。地方债明细已接入周报，续发券一并计入" : ""}`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "上传失败"); }
+    finally { uploadInProgress.current = false; }
   }
 
   function dropFile(event: React.DragEvent<HTMLButtonElement>, type: DatasetType) {
@@ -897,11 +914,13 @@ export default function Workbench() {
         </section>}
 
         {active === "report" && <section className="report-panel focus-panel">
+          <div className="local-report-source"><p>国债政金债发行量、利差及结果以一二级表为准。发行计划用于核对和补充时段；上弹、追加或特殊小团等差异由你核定，修改一二级表后重新上传即可。净融资按发行量减到期明细金额测算。</p></div>
+          {reportWarnings.length > 0 && <details className="local-report-source report-reconciliation" open><summary>一二级与发行计划核对 · {reportWarnings.length} 项</summary><p>以下差异由你判断，生成周报继续采用一二级数据。</p><ul>{reportWarnings.map(note => <li key={note}>{note}</li>)}</ul></details>}
           <div className="local-report-source">
             <p>地方债发行取数：本周 {localRecords.length} 条明细，合计 {localRecords.reduce((sum,row)=>sum+(row.amount||0),0).toFixed(2)} 亿元。最新明细日期：{latestLocalDate}。</p>
             {!localRecords.length && <><p className="report-status report-status-error">本周尚无地方债明细，请从首页上传。数据缺失不等于零发行。</p><label><input type="checkbox" checked={confirmedNoLocalWeek === weekStart} onChange={event => setConfirmedNoLocalWeek(event.target.checked ? weekStart : "")}/> 已核实本周确无地方债发行</label></>}
           </div>
-          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>地方债发行量及分类统计取自首页上传的地方债发行明细；国债政金债发行量及招标结果取自一二级表；四周滚动分析可在“一二级利差”页面查看和复制；新债发行Excel只补充上午/下午。</p>{!issuancePlanRecords.length && <p className="report-status report-status-error">请先在“周报生成数据”模块上传新债发行计划，系统才能准确区分上午和下午。</p>}{!maturityRecords.length && <p className="report-status report-status-error">请先上传本周到期明细，否则到期及净融资项目无法完整填充。</p>}{!spreadRecords.length && <p className="report-status report-status-error">请先上传一二级表，用于发行量、滚动分析和每日招标结果。</p>}{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}{reportDownload && <a className="report-download" href={reportDownload.url} download={reportDownload.name}><Download/>下载已生成周报</a>}</div>
+          <div><span className="section-label">FINAL OUTPUT</span><h2>生成本周客户版周报</h2><p>地方债发行量及分类统计取自首页上传的地方债发行明细；国债政金债发行量及招标结果取自一二级表；四周滚动分析可在“一二级利差”页面查看和复制；新债发行Excel用于时段补充和差异核对，不覆盖一二级数据。</p>{!issuancePlanRecords.length && <p className="report-status report-status-error">请先在“周报生成数据”模块上传新债发行计划，系统才能准确区分上午和下午。</p>}{!maturityRecords.length && <p className="report-status report-status-error">请先上传本周到期明细，否则到期及净融资项目无法完整填充。</p>}{!spreadRecords.length && <p className="report-status report-status-error">请先上传一二级表，用于发行量、滚动分析和每日招标结果。</p>}{reportStatus && <p className={reportStatus.startsWith("生成失败") ? "report-status report-status-error" : "report-status"}>{reportStatus}</p>}{reportDownload && <a className="report-download" href={reportDownload.url} download={reportDownload.name}><Download/>下载已生成周报</a>}</div>
           <button onClick={exportDocx} disabled={reportLoading || !issuancePlanRecords.length || !maturityRecords.length || !spreadRecords.length || (!localRecords.length && confirmedNoLocalWeek !== weekStart)}>{reportLoading ? <LoaderCircle className="spin"/> : <FileText/>}{reportLoading ? "生成中" : "生成 Word"}</button>
         </section>}
 

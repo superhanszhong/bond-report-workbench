@@ -269,6 +269,9 @@ button { color: inherit; }
 .report-panel p { margin: 9px 0 0; max-width: 750px; color: #74716e; font-size: 12px; line-height: 1.65; }
 .report-panel { flex-wrap: wrap; }
 .local-report-source { flex: 1 1 100%; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.report-reconciliation summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+.report-reconciliation ul { margin: 12px 0 0; padding-left: 20px; }
+.report-reconciliation li { margin: 8px 0; font-size: 14px; line-height: 1.65; }
 .local-report-source label { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; color: #76513b; }
 .report-panel .report-status { color: #9a5e36; font-weight: 700; }
 .report-panel .report-status-error { color: #b45f5f; }

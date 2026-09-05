@@ -25,6 +25,27 @@ function current(code: string, tenor: string, date: string, auctionSpreadText: s
   };
 }
 
+test("X/Z alias reuploads retain manually entered comments and an explicitly empty rate selection", () => {
+  const row = { tradeDate: "2026-09-01", bondCode: "09260409X21", bondType: "农发债", amount: 60, tenor: "2" };
+  const first = createPolicyCommentDrafts([row], [])[0];
+  assert.equal(first.rateType, "DR007浮息债");
+  const edited = { ...first, rateType: "", benchmarkValue: "1.5", finalValue: "1.49", referenceBond: "09260402" };
+  const next = createPolicyCommentDrafts([{ ...row, bondCode: "09260409Z21" }], [], [edited])[0];
+  assert.equal(next.id, first.id);
+  assert.equal(next.rateType, "");
+  assert.equal(next.benchmarkValue, "1.5");
+  assert.equal(next.finalValue, "1.49");
+  assert.equal(next.referenceBond, "09260402");
+});
+
+test("historical positive magnitude with a low-secondary annotation remains a negative spread", () => {
+  const previous = history("09260402Z11", "2026-09-01", "0.07BP(较低二级(1.465))");
+  const next = current("09260402Z12", "2", "2026-09-03", "-0.05(较二级(1.465))", "1.4645%", "1.465%");
+  const result = policyComments([previous, next], "2026-09-03")[0];
+  assert.equal(result.previousSpread, -0.07);
+  assert.equal(result.movement, "收窄");
+});
+
 test("政金债短评复现工作样例", () => {
   const rows: ParsedBondRecord[] = [
     history("250409Z30", "2026-07-27", "-4.77(较估值(1.46))", "LPR浮息债"),

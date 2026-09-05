@@ -1,4 +1,6 @@
 import type { ParsedBondRecord, SpreadSummaryMeta } from "./workbench";
+import { basisPointValue, inferredRateType } from "./workbench";
+import { recordKey } from "./record-merge";
 
 export type PolicyShortComment = {
   key: string;
@@ -63,7 +65,7 @@ function firstNumber(text = "") {
 function percentNumber(text = "") {
   const value = firstNumber(text);
   if (value === null) return null;
-  return Math.abs(value) < 0.2 ? value * 100 : value;
+  return /[%％]/.test(text) ? value : Math.abs(value) < 0.2 ? value * 100 : value;
 }
 
 function baseBondCode(code = "") {
@@ -111,14 +113,7 @@ function selectedRateType(row: ParsedBondRecord) {
 }
 
 function bpValue(text = "") {
-  const source = normalized(text);
-  if (!source) return null;
-  const direct = source.match(/^\s*(-?\d+(?:\.\d+)?)/);
-  if (direct) return Number(direct[1]);
-  const magnitude = source.match(/(\d+(?:\.\d+)?)\s*BP/i);
-  if (/平/.test(source) && !magnitude) return 0;
-  if (!magnitude) return null;
-  return /低|负/.test(source) ? -Number(magnitude[1]) : Number(magnitude[1]);
+  return basisPointValue(normalized(text));
 }
 
 function comparison(text = "", fallbackQuote = "") {
@@ -327,13 +322,11 @@ function latestSameBond(row: ParsedBondRecord, history: ParsedBondRecord[]) {
 }
 
 function historicalRateType(row: ParsedBondRecord, history: ParsedBondRecord[]) {
+  const currentType = inferredRateType(row);
+  if (currentType !== "固息或贴现") return currentType;
   const latest = latestSameBond(row, history);
-  const source = `${latest?.remark || ""}${latest?.summaryMeta?.note || ""}${latest?.summaryMeta?.previous?.note || ""}`;
-  if (/DR0{1,2}1/i.test(source)) return "DR001浮息债";
-  if (/DR007/i.test(source)) return "DR007浮息债";
-  if (/DR/i.test(source)) return "DR007浮息债";
-  if (/LPR/i.test(source)) return "LPR浮息债";
-  return "";
+  const latestType = latest ? inferredRateType(latest) : "固息或贴现";
+  return latestType === "固息或贴现" ? "" : latestType;
 }
 
 function inputRate(value: unknown) {
@@ -343,9 +336,9 @@ function inputRate(value: unknown) {
 }
 
 export function createPolicyCommentDrafts(planRecords: ParsedBondRecord[], history: ParsedBondRecord[], existing: PolicyCommentDraft[] = []) {
-  const existingById = new Map(existing.map((draft) => [draft.id, draft]));
+  const existingById = new Map(existing.map((draft) => [recordKey(draft), draft]));
   return planRecords.filter(isPolicy).map((row) => {
-    const id = `${row.tradeDate}|${row.bondCode || row.shortName || ""}`;
+    const id = recordKey(row);
     const previous = latestSameBond(row, history);
     const previousDraft = existingById.get(id);
     const rateType = previousDraft?.rateType ?? historicalRateType(row, history);

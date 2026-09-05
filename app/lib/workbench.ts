@@ -1,4 +1,6 @@
 import XLSX from "xlsx-js-style";
+import { normalizeBondCode } from "./bond-code.ts";
+import { consolidateBondRecords } from "./record-merge.ts";
 
 export type ParsedBondRecord = {
   tradeDate: string;
@@ -108,10 +110,10 @@ const ISSUANCE_PLAN_ALIASES: Record<string, string[]> = {
   托管机构: ["托管机构", "招标场所"],
 };
 
-const SPECIAL_SPREAD_PATTERN = /绿债|绿色|主题债|浮息债/;
+const SPECIAL_SPREAD_PATTERN = /绿债|绿色|主题债|浮息|LPR|DR0*(?:1|7)/i;
 
-export function isSpecialSpreadBond(row: Pick<ParsedBondRecord, "remark" | "summaryMeta">) {
-  return SPECIAL_SPREAD_PATTERN.test(`${row.remark || ""}${row.summaryMeta?.rateType || ""}${row.summaryMeta?.note || ""}`);
+export function isSpecialSpreadBond(row: Pick<ParsedBondRecord, "remark" | "summaryMeta" | "bondCode">) {
+  return SPECIAL_SPREAD_PATTERN.test(`${row.remark || ""}${inferredRateType(row)}${row.summaryMeta?.note || ""}`);
 }
 
 function clean(value: unknown) {
@@ -126,22 +128,26 @@ function numberValue(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function basisPointValue(value: unknown): number | null {
+export function basisPointValue(value: unknown): number | null {
   const direct = numberValue(value);
   if (direct !== null) return direct;
   const text = clean(value);
-  if (!text || /净价/.test(text)) return null;
+  if (!text || /净价|元/.test(text)) return null;
   if (/平/.test(text) && !/^-?\d/.test(text)) return 0;
-  const match = text.match(/^(-?\d+(?:\.\d+)?)/);
-  return match ? Number(match[1]) : null;
+  const match = text.match(/^([+-]?\d+(?:\.\d+)?)/) || text.match(/([+-]?\d+(?:\.\d+)?)\s*BP/i);
+  if (!match) return null;
+  const valueNumber = Number(match[1]);
+  if (/低(?:于)?[^()]*?(?:二级|估值|中间价)|较低|负/.test(text)) return -Math.abs(valueNumber);
+  if (/高(?:于)?[^()]*?(?:二级|估值|中间价)|较高/.test(text)) return Math.abs(valueNumber);
+  return valueNumber;
 }
 
 function percentYieldValue(value: unknown): number | null {
   const text = clean(value);
   if (!text || /净价|价格|元/.test(text)) return null;
   const parsed = numberValue(value);
-  if (parsed === null) return null;
-  return Math.abs(parsed) < 0.2 ? parsed * 100 : parsed;
+  if (parsed === null || Math.abs(parsed) >= 50) return null;
+  return /[%％]/.test(text) ? parsed : Math.abs(parsed) < 0.2 ? parsed * 100 : parsed;
 }
 
 export function resolveSpreadBp(input: {
@@ -178,6 +184,7 @@ export function resolveSpreadBp(input: {
 }
 
 export function spreadValueForMetric(row: ParsedBondRecord, metric: SpreadMetric) {
+  if (usesDrPrice(row)) return null;
   if (metric === "all_in") return row.spread ?? null;
   const raw = row.raw || {};
   const displayed = raw.__display && typeof raw.__display === "object" ? raw.__display as Record<string, unknown> : {};
@@ -186,6 +193,25 @@ export function spreadValueForMetric(row: ParsedBondRecord, metric: SpreadMetric
   const winning = percentYieldValue(raw.中标利率 ?? displayed.中标利率 ?? row.summaryMeta?.winningRateText);
   const secondary = percentYieldValue(raw.二级 ?? displayed.二级 ?? row.summaryMeta?.secondaryText);
   return winning !== null && secondary !== null ? Number(((winning - secondary) * 100).toFixed(6)) : null;
+}
+
+// Only confirmed bond attributes fill empty remarks; a one-off historical note must not propagate.
+export function inferredRateType(row: Pick<ParsedBondRecord, "bondCode" | "remark" | "summaryMeta">) {
+  const source = row.remark || "";
+  if (/DR0{1,2}1/i.test(source)) return "DR001浮息债";
+  if (/DR007/i.test(source)) return "DR007浮息债";
+  if (/LPR/i.test(source)) return "LPR浮息债";
+  const base = normalizeBondCode(row.bondCode).replace(/[XZ]\d*$/, "");
+  const known: Record<string, string> = { "250409": "LPR浮息债", "092603001": "DR001浮息债", "09260409": "DR007浮息债" };
+  if (known[base]) return known[base];
+  const fallback = `${row.summaryMeta?.rateType || ""} ${source}`;
+  if (/DR0{1,2}1/i.test(fallback)) return "DR001浮息债";
+  if (/DR/i.test(fallback)) return "DR007浮息债";
+  return /LPR/i.test(fallback) ? "LPR浮息债" : "固息或贴现";
+}
+
+export function usesDrPrice(row: Pick<ParsedBondRecord, "bondCode" | "remark" | "summaryMeta">) {
+  return /[XZ]\d*$/.test(normalizeBondCode(row.bondCode)) && /^DR/.test(inferredRateType(row));
 }
 
 export function recordsForSpreadMetric(records: ParsedBondRecord[], metric: SpreadMetric) {
@@ -355,15 +381,15 @@ function rateTypeFromRemark(remark: string) {
 export async function parseLocalBondFile(file: File) {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
   const required = ["招标日", "债券代码", "债券简称", "期限", "发行量"];
-  const unique = new Map<string, ParsedBondRecord>();
+  const candidates: ParsedBondRecord[] = [];
   for (const sheetName of workbook.SheetNames) {
     const rows = boundedSheetRows(workbook.Sheets[sheetName]);
     const { row: headerRow, index } = headerIndex(rows, LOCAL_ALIASES);
     if (headerRow < 0 || required.some((name) => index[name] === undefined)) continue;
     for (let r = headerRow + 1; r < rows.length; r += 1) {
       const raw = Object.fromEntries(Object.entries(rowObject(rows[r], index)).map(([key, value]) => [key, value instanceof Date ? isoDate(value) : value]));
-      const bondCode = clean(raw.债券代码).replace(/\.(?:IB|SH|SZ)$/i, "");
-      if (!/^\d{6,9}$/.test(bondCode)) continue;
+      const bondCode = normalizeBondCode(raw.债券代码);
+      if (!/^\d{6,9}(?:[XZ]\d*)?$/.test(bondCode)) continue;
       const date = excelDate(raw.招标日);
       const amount = numberValue(raw.发行量);
       if (!date || amount === null || amount < 0 || !clean(raw.期限)) {
@@ -375,7 +401,7 @@ export async function parseLocalBondFile(file: File) {
       const floorRate = benchmark === null ? explicitFloor : benchmark + spread / 100;
       const fullName = clean(raw.债券全称);
       const region = clean(raw.区域名称) || regionFromName(fullName);
-      unique.set(`${isoDate(date)}|${bondCode}`, {
+      candidates.push({
         tradeDate: isoDate(date),
         bondCode,
         shortName: clean(raw.债券简称),
@@ -393,7 +419,7 @@ export async function parseLocalBondFile(file: File) {
       });
     }
   }
-  const records = [...unique.values()];
+  const records = consolidateBondRecords(candidates);
   if (!records.length) throw new Error(`未读取到地方债发行明细，请检查表头：${required.join("、")}`);
   records.sort((a, b) => `${a.tradeDate}${a.bidTime}${a.venue}`.localeCompare(`${b.tradeDate}${b.bidTime}${b.venue}`));
   return records;
@@ -410,7 +436,7 @@ export async function parseMaturityFile(file: File) {
     for (let r = headerRow + 1; r < rows.length; r += 1) {
       const raw = rowObject(rows[r], index);
       const date = excelDate(raw.实际到期日);
-      const bondCode = clean(raw.债券代码).replace(/\.(?:IB|SH|SZ)$/i, "");
+      const bondCode = normalizeBondCode(raw.债券代码);
       const amount = numberValue(raw.发行规模);
       const issuer = clean(raw.发行人);
       if (!date || !bondCode || amount === null) continue;
@@ -464,7 +490,7 @@ export async function parseIssuancePlanFile(file: File) {
       const shortName = clean(raw.债券简称);
       const issuer = rateIssuerFromShortName(shortName);
       const date = excelDate(raw.发行起始日);
-      const bondCode = clean(raw.债券代码).replace(/\.IB$/i, "");
+      const bondCode = normalizeBondCode(raw.债券代码);
       if (!issuer || !date || !bondCode) continue;
       const auctionTarget = clean(raw.招标标的);
       const custody = clean(raw.托管机构);
@@ -521,6 +547,7 @@ export async function parseSpreadFile(file: File) {
     发行量: ["发行量", "发行量(亿元)"], 中标利率: ["中标利率"], 综收: ["综收"],
     招标利差: ["中标比二级(bp)", "中标比二级（bp）"], 二级: ["截标前二级价格"],
     前一日估值: ["前一日估值"],
+    中标净价: ["中标净价", "缴款净价", "发行净价"],
     募集用途: ["募集用途"], 全场倍数: ["全场倍数"], 边际倍数: ["边际倍数"],
     边际投标量: ["首场边际投标量（亿）", "边际投标量（亿）"],
     边际中标量: ["首场边际中标量（亿）", "边际中标量（亿）"],
@@ -539,17 +566,18 @@ export async function parseSpreadFile(file: File) {
       const raw = rowObject(rows[r], index);
       const display = rowObject(displayRows[r] || [], index);
       const date = excelDate(raw.发行日期);
-      const bondCode = clean(raw.代码).replace(/\.IB$/i, "");
+      const bondCode = normalizeBondCode(raw.代码);
       if (!date || !bondCode) continue;
       const issuer = clean(raw.发行人);
       const remark = clean(raw.备注);
+      const rateType = inferredRateType({ bondCode, remark });
       const route = routeFromRemark(remark, bondCode);
       const resolvedSpread = resolveSpreadBp({
         provided: raw.利差, allIn: raw.综收, secondary: raw.二级,
-        winningRate: raw.中标利率, issuer, remark,
+        winningRate: raw.中标利率, issuer, remark: `${remark} ${rateType}`,
       });
       const meta: SpreadSummaryMeta = {
-        baseCode: baseBondCode(bondCode), route, rateType: rateTypeFromRemark(remark),
+        baseCode: baseBondCode(bondCode), route, rateType,
         displaySpreadText: clean(display.利差), auctionSpreadText: clean(display.招标利差),
         allInText: clean(display.综收), secondaryText: clean(display.二级),
         winningRateText: clean(display.中标利率), note: remark, proceeds: clean(display.募集用途),
@@ -569,9 +597,10 @@ export async function parseSpreadFile(file: File) {
   candidates.sort((a, b) => `${a.tradeDate}|${String(a.order).padStart(8, "0")}`.localeCompare(`${b.tradeDate}|${String(b.order).padStart(8, "0")}`));
   const sameBondHistory = new Map<string, ParsedBondRecord>();
   const discountHistory = new Map<string, ParsedBondRecord>();
-  const records: ParsedBondRecord[] = candidates.map(({ order: _order, ...record }) => {
+  const records: ParsedBondRecord[] = consolidateBondRecords(candidates).map(({ order: _order, ...record }) => {
     void _order;
     const meta = record.summaryMeta!;
+    if (usesDrPrice(record)) record.spread = null;
     const comparisonType = isDiscountBond(record) ? "discount_comparator" : isReopenedBond(record) ? "same_bond" : null;
     const previous = comparisonType === "discount_comparator"
       ? discountHistory.get(discountComparatorKey(record))

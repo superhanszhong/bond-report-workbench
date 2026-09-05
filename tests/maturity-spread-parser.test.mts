@@ -1,9 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import XLSX from "xlsx-js-style";
-import { maturityDailyTotals, parseLocalBondFile, parseIssuancePlanFile, parseMaturityFile, rateMaturityBreakdown, resolveSpreadBp } from "../app/lib/workbench.ts";
+import { basisPointValue, inferredRateType, isSpecialSpreadBond, maturityDailyTotals, parseLocalBondFile, parseIssuancePlanFile, parseMaturityFile, parseSpreadFile, rateMaturityBreakdown, resolveSpreadBp, spreadValueForMetric } from "../app/lib/workbench.ts";
 import { mergeIssuanceSessions, planSession } from "../app/lib/report.ts";
 import { mergeRecord } from "../app/lib/record-merge.ts";
+
+test("spread import coalesces numeric and textual SHCH codes before building history and keeps explicit net price", async () => {
+  const book = XLSX.utils.book_new();
+  const header = ["发行日期", "代码", "期限", "发行人", "发行量", "综收比二级(bp)", "中标净价"];
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+    header, ["2026/09/01", 9260411, "1.112", "中国农业发展银行", 60, 0.16, null],
+    ["2026/09/01", "09260411", "1.112", "中国农业发展银行", 60, 0.16, null],
+    ["2026/09/01", "09260409Z21", "2", "中国农业发展银行", 60, null, 99.9767],
+  ]), "历史");
+  const rows = await parseSpreadFile(new File([XLSX.write(book, { type: "array", bookType: "xlsx" })], "一二级.xlsx"));
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].bondCode, "09260411");
+  assert.equal(rows[0].summaryMeta?.route, "上清所");
+  assert.equal(rows[0].summaryMeta?.previous, undefined);
+  assert.equal(rows[1].raw?.中标净价, 99.9767);
+});
 
 test("local issuance import reads multiple detail sheets and removes duplicate date/code rows", async () => {
   const book = XLSX.utils.book_new();
@@ -31,6 +47,53 @@ test("local issuance import rejects missing amounts instead of treating them as 
     ["2026/09/04", "2671001", "26北京47", "7", null],
   ]), "地方债");
   await assert.rejects(() => parseLocalBondFile(new File([XLSX.write(book, {type: "array", bookType: "xlsx"})], "地方债.xlsx")), /发行量.*无效/);
+});
+
+test("local reopenings are retained while equivalent X/Z spellings are deduplicated", async () => {
+  const makeFile = (amount = 30) => {
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+      ["招标日", "债券代码", "债券简称", "期限", "发行量"],
+      ["2026/09/01", "2671001", "26北京47", "7", 20],
+      ["2026/09/04", "2671001X", "26北京47续发", "7", 30],
+      ["2026/09/04", "2671001Z01.IB", "26北京47续发", "7", amount],
+      ["2026/09/04", "2671001X2", "26北京47续发2", "7", 40],
+    ]), "地方债");
+    return new File([XLSX.write(book, { type: "array", bookType: "xlsx" })], "地方债.xlsx");
+  };
+  const rows = await parseLocalBondFile(makeFile());
+  assert.equal(rows.length, 3);
+  assert.equal(rows.reduce((sum, row) => sum + row.amount!, 0), 90);
+  await assert.rejects(() => parseLocalBondFile(makeFile(31)), /发行量冲突/);
+});
+
+test("spread signs follow high/low descriptions and never interpret net prices as BP", () => {
+  assert.equal(basisPointValue("0.07BP(较低二级(1.465))"), -0.07);
+  assert.equal(basisPointValue("低2603001估值0.35BP"), -0.35);
+  assert.equal(basisPointValue("0.16(较高估值)"), 0.16);
+  assert.equal(basisPointValue("平二级(1.42)"), 0);
+  assert.equal(basisPointValue("低二级净价(99.9775)0.0008元"), null);
+  const dr = { tradeDate: "2026-09-01", bondCode: "09260409Z21", spread: 0.0008, raw: { 中标利率: 1.49, 二级: 99.9775, 招标利差: 0.0008 } };
+  assert.equal(spreadValueForMetric(dr, "winning"), null);
+  assert.equal(spreadValueForMetric(dr, "all_in"), null);
+  assert.equal(spreadValueForMetric({ ...dr, bondCode: "09260409", raw: { 中标利率: "0.1%", 二级: "0.11%" } }, "winning"), -1);
+  assert.equal(inferredRateType({ bondCode: "092603001Z04", remark: "DR浮息" }), "DR001浮息债");
+});
+
+test("one historical special note does not contaminate later ordinary reopenings", async () => {
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
+    ["发行日期", "代码", "期限", "发行人", "发行量", "综收比二级(bp)", "备注"],
+    ["2026/07/01", "260403Z17", "3", "中国农业发展银行", 70, -1, "LPR浮息债"],
+    ["2026/08/17", "260403Z26", "3", "中国农业发展银行", 70, -1, "京津冀协同发展主题债"],
+    ["2026/08/31", "260403Z30", "3", "中国农业发展银行", 70, -1, ""],
+    ["2026/08/31", "250409Z35", "3", "中国农业发展银行", 20, -1, ""],
+  ]), "历史");
+  const rows = await parseSpreadFile(new File([XLSX.write(book, { type: "array", bookType: "xlsx" })], "一二级.xlsx"));
+  assert.equal(isSpecialSpreadBond(rows[1]), true);
+  assert.equal(isSpecialSpreadBond(rows[2]), false);
+  assert.equal(rows[2].summaryMeta?.rateType, "固息或贴现");
+  assert.equal(rows[3].summaryMeta?.rateType, "LPR浮息债");
 });
 
 test("uses the supplied spread when it reconciles with all-in and secondary yields", () => {

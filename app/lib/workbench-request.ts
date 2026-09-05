@@ -1,4 +1,5 @@
-import { mergeRecord, recordKey, type RecordPayload, type StoredRecord } from "./record-merge";
+import { consolidateBondRecords, prepareRecordUpdate, recordKey, withImportHistory, type RecordPayload, type StoredRecord } from "./record-merge";
+import { normalizeBondCode } from "./bond-code";
 
 export const LOCAL_STORAGE_MODE = import.meta.env?.VITE_STORAGE_MODE === "local";
 
@@ -167,16 +168,21 @@ async function localPost(init?: RequestInit) {
     }
     const allRecords = await getAll<LocalRecord>(database, "records");
     const existingRows = allRecords.filter((row) => row.dataset_type === payload.datasetType && row.week_start === payload.weekStart);
-    const existingByKey = new Map(existingRows.map((row) => [recordKey({ tradeDate: row.trade_date, bondCode: row.bond_code }), row]));
-    const mergedRows = payload.records.map((row) => {
-      const normalized = { ...row, tradeDate: row.tradeDate || payload.tradeDate };
-      const existing = existingByKey.get(recordKey(normalized));
-      return { existing, ...mergeRecord(normalized, existing) };
+    const existingByKey = new Map<string, LocalRecord[]>();
+    existingRows.forEach(row => {
+      const key = recordKey({ tradeDate: row.trade_date, bondCode: row.bond_code });
+      existingByKey.set(key, [...(existingByKey.get(key) || []), row]);
+    });
+    const incomingRows = consolidateBondRecords(payload.records);
+    const mergedRows = incomingRows.map((row) => {
+      const normalized = { ...row, bondCode: normalizeBondCode(row.bondCode), tradeDate: row.tradeDate || payload.tradeDate };
+      const aliases = existingByKey.get(recordKey(normalized)) || [];
+      return { existing: aliases[0], ...prepareRecordUpdate(normalized, aliases) };
     });
     const changes = mergedRows.filter((row) => row.changed);
     const inserted = changes.filter((row) => !row.existing).length;
     const updated = changes.length - inserted;
-    if (!changes.length) return response({ ok: true, count: 0, inserted: 0, updated: 0, unchanged: payload.records.length });
+    if (!changes.length) return response({ ok: true, count: 0, inserted: 0, updated: 0, unchanged: incomingRows.length });
     const importId = crypto.randomUUID();
     const transaction = database.transaction(["imports", "records"], "readwrite");
     transaction.objectStore("imports").put({
@@ -188,9 +194,18 @@ async function localPost(init?: RequestInit) {
       record_count: changes.length,
       created_at: new Date().toISOString(),
     } satisfies LocalImport);
-    changes.forEach(({ record }) => transaction.objectStore("records").put(storedRecord(record, payload.datasetType!, payload.weekStart!, importId)));
+    const importedAt = new Date().toISOString();
+    changes.forEach(({ record, existing }) => {
+      const traced = withImportHistory(record, existing, payload.fileName!, importedAt);
+      const updated = storedRecord(traced, payload.datasetType!, payload.weekStart!, importId);
+      transaction.objectStore("records").put(updated);
+      // A user-supplied correction must also supersede any legacy alias of this exact issuance.
+      // Keep the original storage keys; read reconciliation prevents double counting.
+      (existingByKey.get(recordKey(record)) || []).filter(row => row.id !== updated.id)
+        .forEach(row => transaction.objectStore("records").put({ ...updated, id: row.id }));
+    });
     await transactionDone(transaction);
-    return response({ ok: true, importId, count: changes.length, inserted, updated, unchanged: payload.records.length - changes.length }, 201);
+    return response({ ok: true, importId, count: changes.length, inserted, updated, unchanged: incomingRows.length - changes.length }, 201);
   } finally {
     database.close();
   }
@@ -221,6 +236,14 @@ async function localRequest(input: string, init?: RequestInit) {
   return response({ error: "不支持的请求" }, 405);
 }
 
-export function workbenchRequest(input: string, init?: RequestInit) {
-  return LOCAL_STORAGE_MODE ? localRequest(input, init) : fetch(input, init);
+export async function workbenchRequest(input: string, init?: RequestInit) {
+  const result = await (LOCAL_STORAGE_MODE ? localRequest(input, init) : fetch(input, init));
+  if (result.ok && (init?.method || "GET").toUpperCase() === "GET") {
+    const data = await result.clone().json();
+    if (Array.isArray(data.records)) {
+      try { return response({ ...data, records: consolidateBondRecords(data.records) }); }
+      catch (error) { return response({ error: error instanceof Error ? error.message : "债券记录核对失败" }, 409); }
+    }
+  }
+  return result;
 }
