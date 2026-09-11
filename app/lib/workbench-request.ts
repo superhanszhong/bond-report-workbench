@@ -1,7 +1,16 @@
 import { consolidateBondRecords, prepareRecordUpdate, recordKey, withImportHistory, type RecordPayload, type StoredRecord } from "./record-merge";
 import { normalizeBondCode } from "./bond-code";
+import { advanceReportSnapshot, type ReportSnapshot, type ReportTotals } from "./report-baseline";
 
 export const LOCAL_STORAGE_MODE = import.meta.env?.VITE_STORAGE_MODE === "local";
+
+// Comments use the saved history, independent of the week selected on the homepage.
+export async function loadSpreadHistory<T = StoredRecord>(request: typeof workbenchRequest = workbenchRequest): Promise<T[]> {
+  const result = await request("/api/workbench?startDate=1900-01-01&endDate=9999-12-31&datasetType=spread");
+  const payload = await result.json() as { records?: T[]; error?: string };
+  if (!result.ok || !Array.isArray(payload.records)) throw new Error(payload.error || "读取首页一二级历史库失败");
+  return payload.records;
+}
 
 type LocalImport = {
   id: string;
@@ -32,6 +41,29 @@ type LocalDraft = {
 type StoreName = "imports" | "records" | "drafts";
 const DATABASE_NAME = "bond-report-workbench";
 const DATABASE_VERSION = 1;
+const REPORT_SNAPSHOT_KEY = "__latest_report_snapshot__";
+
+export async function loadReportSnapshot(): Promise<ReportSnapshot | null> {
+  const database = await openDatabase();
+  try {
+    const row = await requestResult(database.transaction("drafts", "readonly").objectStore("drafts").get(REPORT_SNAPSHOT_KEY));
+    return row?.snapshot || null;
+  } finally { database.close(); }
+}
+
+export async function saveReportSnapshot(current: ReportTotals, comparison: ReportTotals | null): Promise<ReportSnapshot> {
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction("drafts", "readwrite");
+    const done = transactionDone(transaction);
+    const store = transaction.objectStore("drafts");
+    const row = await requestResult(store.get(REPORT_SNAPSHOT_KEY));
+    const snapshot = advanceReportSnapshot(row?.snapshot || null, current, comparison);
+    store.put({ week_start: REPORT_SNAPSHOT_KEY, snapshot });
+    await done;
+    return snapshot;
+  } finally { database.close(); }
+}
 
 function requestResult<T>(request: IDBRequest<T>) {
   return new Promise<T>((resolve, reject) => {

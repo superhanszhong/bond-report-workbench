@@ -358,3 +358,9 @@ button { color: inherit; }
 }
 .converter-shortcut { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
 .converter-shortcut span { font-size: 12px; color: var(--muted); }
+.manual-baseline { border: 1px solid var(--border, #dde3ea); border-radius: 12px; padding: 16px; }
+.manual-baseline p { font-size: 14px; line-height: 1.6; color: #526173; margin: 12px 0; }
+.manual-baseline-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 16px 0; }
+.manual-baseline-fields label { display: grid; gap: 8px; font-size: 14px; color: #334155; }
+.manual-baseline-fields input { width: 100%; box-sizing: border-box; min-height: 42px; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #172b40; font: inherit; }
+.manual-baseline-fields input:focus-visible { outline: 2px solid #356f92; outline-offset: 2px; }

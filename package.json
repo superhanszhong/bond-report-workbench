@@ -10,7 +10,7 @@
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "build:pages": "vite build --config vite.pages.config.ts",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs && node --import tsx --test tests/record-merge.test.mts tests/spread-summary.test.mts tests/maturity-spread-parser.test.mts tests/policy-comment.test.mts tests/report-pagination.test.mts",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs && node --import tsx --test tests/record-merge.test.mts tests/spread-summary.test.mts tests/maturity-spread-parser.test.mts tests/policy-comment.test.mts tests/comment-history-sync.test.mts tests/report-pagination.test.mts tests/report-baseline.test.mts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern docs",
     "db:generate": "drizzle-kit generate"
   },

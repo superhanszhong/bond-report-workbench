@@ -4,6 +4,7 @@ import { fridayOf, usesDrPrice, spreadValueForMetric, basisPointValue } from "./
 import type { ParsedBondRecord } from "./workbench.ts";
 import { consolidateBondRecords, recordKey } from "./record-merge.ts";
 import { baseBondCode, bondIssueKey } from "./bond-code.ts";
+import type { ReportTotals } from "./report-baseline.ts";
 
 type ReportInput = {
   weekStart: string;
@@ -12,6 +13,7 @@ type ReportInput = {
   spreadRecords: ParsedBondRecord[];
   scheduleRecords?: ParsedBondRecord[];
   previousSpreadRecords?: ParsedBondRecord[];
+  previousRateIssuance?: number;
   ytdLocalRecords?: ParsedBondRecord[];
   templateBytes?: ArrayBuffer;
   maturity?: {
@@ -274,7 +276,7 @@ function previousWeekStart(weekStart: string) {
 function reviewValues(row: ParsedBondRecord[]) {
   return row.map((item) => [
     `${item.bondCode || ""}${item.remark ? `(${item.remark})` : ""}`,
-    item.tenor, item.amount, reportWinningResult(item), reportBenchmark(item, "前一日估值"),
+    item.tenor, item.amount, displayRate(item, "中标利率"), reportBenchmark(item, "前一日估值"),
     reportBenchmark(item, "二级"), display(item, "全场倍数"), display(item, "边际倍数"),
   ]);
 }
@@ -294,8 +296,8 @@ function netPriceQuote(value: string) {
   return numeric !== null && (/元/.test(value) || numeric >= 50) ? value.replace(/元$/, "") + "元" : null;
 }
 
-function reportWinningResult(row: ParsedBondRecord) {
-  if (!usesDrNetPrice(row)) return displayRate(row, "中标利率");
+// Net price is retained for validation, independently of the weekly table's winning-rate display.
+function drWinningNetPrice(row: ParsedBondRecord) {
   const explicit = display(row, "中标净价");
   const rawPrice = row.raw?.["中标净价"];
   const price = numericQuote(explicit) !== null ? explicit.replace(/元$/, "") + "元"
@@ -308,7 +310,7 @@ function reportBenchmark(row: ParsedBondRecord, field: string) {
   const value = display(row, field);
   if (!usesDrNetPrice(row) || numericQuote(value) === null) return displayRate(row, field);
   const price = netPriceQuote(value);
-  return price ? `净价 ${price}` : `${value.replace(/%$/, "")}%`;
+  return price || displayRate(row, field);
 }
 
 export function reportDataWarnings(rows: ParsedBondRecord[], schedules: ParsedBondRecord[]) {
@@ -318,8 +320,8 @@ export function reportDataWarnings(rows: ParsedBondRecord[], schedules: ParsedBo
   // X/Z are interchangeable for the same reopening; a bare suffix is reopening 1.
   const comparisonCode = bondIssueKey;
   for (const row of rows) {
-    if (usesDrNetPrice(row) && reportWinningResult(row).includes("净价未提供")) {
-      warnings.push(`${row.bondCode} 缺少中标净价，请在一二级表补充“中标净价”列后上传；周报将标注未提供，不以收益率代替。`);
+    if (usesDrNetPrice(row) && drWinningNetPrice(row).includes("净价未提供")) {
+      warnings.push(`${row.bondCode} 缺少中标净价，无法核对净价差；可在一二级表补充“中标净价”列后上传，周报仍展示中标利率。`);
     }
     const sameIssue = schedules.filter(plan => plan.tradeDate === row.tradeDate && basePlanCode(plan.bondCode) === basePlanCode(row.bondCode));
     if (sameIssue.length && !sameIssue.some(plan => comparisonCode(plan.bondCode) === comparisonCode(row.bondCode))) {
@@ -337,7 +339,7 @@ export function reportDataWarnings(rows: ParsedBondRecord[], schedules: ParsedBo
     }
     const raw = row.raw || {};
     if (usesDrPrice(row)) {
-      const winningPrice = numericQuote(reportWinningResult(row).replace(/^净价\s*/, ""));
+      const winningPrice = numericQuote(drWinningNetPrice(row).replace(/^净价\s*/, ""));
       const secondaryPrice = numericQuote(display(row, "二级"));
       const description = String(raw.招标利差 || row.summaryMeta?.auctionSpreadText || "");
       const stated = description.match(/^\s*([+-]?\d+(?:\.\d+)?)\s*元/) || description.match(/\)\s*([+-]?\d+(?:\.\d+)?)\s*元/);
@@ -371,7 +373,7 @@ function rewriteDailyTable(table: Element, rows: ParsedBondRecord[]) {
   const sample = sourceRows[1];
   sourceRows.slice(1).forEach((row) => table.removeChild(row));
   if (!sample) return;
-  if (header && rows.some(usesDrNetPrice)) rewriteRow(header, ["代码", "期限", "发行量(亿元)", "中标结果", "前一日估值", "二级成交", "全场倍数", "边际倍数"]);
+  if (header && rows.some(usesDrNetPrice)) rewriteRow(header, ["代码", "期限", "发行量(亿元)", "中标利率", "前一日估值", "二级成交", "全场倍数", "边际倍数"]);
   reviewValues(rows).forEach((values) => {
     const row = sample.cloneNode(true) as Element;
     // 母版的示例行保留了较大的固定行高；按实际内容自动伸缩，避免少量发行时出现大片留白。
@@ -382,8 +384,18 @@ function rewriteDailyTable(table: Element, rows: ParsedBondRecord[]) {
   if (!header) throw new Error("周报母版缺少每日回顾表头");
 }
 
+export function reportTotals(input: ReportInput): ReportTotals {
+  const rateIssuance = amount(consolidateBondRecords(input.spreadRecords));
+  const localIssuance = amount(consolidateBondRecords(input.localRecords));
+  const verified = VERIFIED_RATE_FINANCING[input.weekStart];
+  const localMaturity = input.maturity ? input.maturity.localTotal ?? Object.values(input.maturity.localDaily).reduce((sum, v) => sum + v, 0) : null;
+  return { weekStart: input.weekStart, savedAt: new Date().toISOString(), rateIssuance,
+    rateNet: verified?.net ?? (input.maturity ? rateIssuance - input.maturity.rateTotal : null),
+    localIssuance, localNet: localMaturity === null ? null : localIssuance - localMaturity };
+}
+
 export async function buildWeeklyReportBlob({
-  weekStart, localRecords, spreadRecords, scheduleRecords = [], previousSpreadRecords = [], ytdLocalRecords = localRecords, templateBytes, maturity,
+  weekStart, localRecords, spreadRecords, scheduleRecords = [], previousSpreadRecords = [], previousRateIssuance, ytdLocalRecords = localRecords, templateBytes, maturity,
 }: ReportInput) {
   spreadRecords = consolidateBondRecords(spreadRecords);
   previousSpreadRecords = consolidateBondRecords(previousSpreadRecords);
@@ -416,7 +428,7 @@ export async function buildWeeklyReportBlob({
     const annual = ytdByKey.get(recordKey(row));
     if (!annual || Math.abs((annual.amount || 0) - (row.amount || 0)) > 0.00001 || localNature(annual) !== localNature(row)) throw new Error(`地方债 ${row.bondCode} 本周与年度明细不一致，请刷新或重新上传完整底稿`);
   }
-  const previousAmount = amount(previousSpreadRecords);
+  const previousAmount = previousRateIssuance ?? amount(previousSpreadRecords);
   const change = previousAmount ? (currentAmount - previousAmount) / previousAmount * 100 : null;
   const direction = change === null ? "" : change >= 0 ? `，较上周增加${Math.abs(change).toFixed(2)}%` : `，较上周减少${Math.abs(change).toFixed(2)}%`;
   const verifiedCurrent = VERIFIED_RATE_FINANCING[weekStart];
@@ -430,7 +442,7 @@ export async function buildWeeklyReportBlob({
     const rateMaturity = verifiedCurrent?.maturity ?? maturity.rateTotal;
     const net = verifiedCurrent?.net ?? currentAmount - rateMaturity;
     const priorNet = verifiedCurrent?.previousNet ?? verifiedPrevious?.net ?? maturity.previousRateNet;
-    const netDirection = priorNet === undefined ? "" : net >= priorNet ? "增加" : "减少";
+    const netDirection = priorNet === undefined ? "" : Math.abs(net - priorNet) < 0.00001 ? "持平" : net > priorNet ? "增加" : "减少";
     const comparison = priorNet === undefined ? "" : !verifiedCurrent && verifiedPrevious
       ? `，上周净融资额${text(priorNet)}亿为已核定总偿还口径，不作直接比较`
       : `，净融资较上周${netDirection}（上周${verifiedCurrent ? "净融资额" : "到期口径测算净融资额"}${text(priorNet)}亿）`;

@@ -10,12 +10,13 @@ import {
   inferredRateType, isSpecialSpreadBond, parseSpreadFile, ParsedBondRecord, rateMaturityBreakdown, recordsForSpreadMetric, resolveSpreadBp,
   rollingSpreadAnalysis, SpreadMetric,
 } from "./lib/workbench";
-import { buildWeeklyReportBlob, reportDataWarnings } from "./lib/report";
+import { buildWeeklyReportBlob, reportDataWarnings, reportTotals } from "./lib/report";
 import {
   createPolicyCommentDrafts, policyDraftResults, PolicyCommentDraft, POLICY_FLOAT_RATE_OPTIONS,
 } from "./lib/policy-comment";
-import { LOCAL_STORAGE_MODE, workbenchRequest } from "./lib/workbench-request";
-import { recordKey } from "./lib/record-merge";
+import { LOCAL_STORAGE_MODE, loadSpreadHistory, loadReportSnapshot, saveReportSnapshot, workbenchRequest } from "./lib/workbench-request";
+import { reportBaseline, type ReportSnapshot, type ReportTotals } from "./lib/report-baseline";
+import ManualReportBaseline from "./manual-report-baseline";
 
 type StoredRecord = ParsedBondRecord & {
   id: number;
@@ -307,7 +308,6 @@ export default function Workbench() {
   const [chartRecords, setChartRecords] = useState<ParsedBondRecord[]>([]);
   const [chartAnalysisRecords, setChartAnalysisRecords] = useState<ParsedBondRecord[]>([]);
   const [spreadSourceRecords, setSpreadSourceRecords] = useState<ParsedBondRecord[]>([]);
-  const [historicalSpreadRecords, setHistoricalSpreadRecords] = useState<ParsedBondRecord[]>([]);
   const [commentHistoryRecords, setCommentHistoryRecords] = useState<ParsedBondRecord[]>([]);
   const [commentPlanRecords, setCommentPlanRecords] = useState<ParsedBondRecord[]>([]);
   const [commentDrafts, setCommentDrafts] = useState<PolicyCommentDraft[]>([]);
@@ -319,6 +319,7 @@ export default function Workbench() {
   const [chartLoading, setChartLoading] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportStatus, setReportStatus] = useState("");
+  const [savedReportSnapshot, setSavedReportSnapshot] = useState<ReportSnapshot | null>(null);
   const [confirmedNoLocalWeek, setConfirmedNoLocalWeek] = useState("");
   const [reportDownload, setReportDownload] = useState<{ url: string; name: string } | null>(null);
   const [latestDates, setLatestDates] = useState<LatestDates>({});
@@ -330,6 +331,7 @@ export default function Workbench() {
   const commentPlanInput = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const uploadInProgress = useRef(false);
+  const weekLoadVersion = useRef(0);
 
   useEffect(() => () => {
     if (reportDownload) URL.revokeObjectURL(reportDownload.url);
@@ -342,6 +344,7 @@ export default function Workbench() {
   const issuancePlanRecords = records.filter((_, i) => data.records[i]?.dataset_type === "issuance_plan");
   const reportWarnings = reportDataWarnings(spreadRecords, issuancePlanRecords);
   const weekEnd = fridayOf(weekStart);
+  const savedReportBaseline = reportBaseline(savedReportSnapshot, weekStart);
   const spreadAmount = spreadRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
   const latestSpreadDate = latestDates.spread || "暂无数据";
   const latestLocalDate = latestDates.local_bond || "暂无数据";
@@ -366,12 +369,8 @@ export default function Workbench() {
     [chartMetricRecords, chartMetricAnalysisRecords, chartRange],
   );
   const legacySpreadData = spreadRecords.length > 0 && spreadRecords.some((row) => !row.summaryMeta);
-  const commentHistorySource = useMemo(() => {
-    const merged = new Map<string, ParsedBondRecord>();
-    [...historicalSpreadRecords, ...commentHistoryRecords].forEach((row) => merged.set(recordKey(row), row));
-    return [...merged.values()].sort((a, b) => `${a.tradeDate}|${a.bondCode || ""}`.localeCompare(`${b.tradeDate}|${b.bondCode || ""}`));
-  }, [historicalSpreadRecords, commentHistoryRecords]);
-  const commentHistoryLatestDate = commentHistorySource.map((row) => row.tradeDate).sort().at(-1) || latestDates.spread || "暂无数据";
+  const commentHistorySource = commentHistoryRecords;
+  const commentHistoryLatestDate = commentHistorySource.map((row) => row.tradeDate).sort().at(-1) || "暂无数据";
   const commentResults = useMemo(() => policyDraftResults(commentDrafts, commentHistorySource), [commentDrafts, commentHistorySource]);
   const commentDates = useMemo(() => [...new Set(commentDrafts.map((draft) => draft.tradeDate))].sort(), [commentDrafts]);
   const effectiveCommentDate = commentDates.includes(commentSelectedDate) ? commentSelectedDate : commentDates.at(-1) || "";
@@ -381,26 +380,30 @@ export default function Workbench() {
   const allCompletedSelected = completedComments.length > 0 && selectedCompletedComments.length === completedComments.length;
 
   async function loadWeek() {
+    const loadVersion = ++weekLoadVersion.current;
     setLoading(true);
     try {
       const historyStart = shiftDate(weekStart, -370);
       const historyEnd = shiftDate(weekStart, -1);
-      const [response, latestResponse, historyResponse] = await Promise.all([
+      const [response, latestResponse, savedHistory, savedSnapshot] = await Promise.all([
         workbenchRequest(`/api/workbench?weekStart=${weekStart}`),
         workbenchRequest("/api/workbench?meta=latest"),
-        workbenchRequest(`/api/workbench?startDate=${historyStart}&endDate=${historyEnd}`),
+        loadSpreadHistory<StoredRecord>(),
+        loadReportSnapshot(),
       ]);
       const payload = await response.json() as WeekData & { error?: string };
       const latestPayload = await latestResponse.json() as { latestDates?: LatestDates; error?: string };
-      const historyPayload = await historyResponse.json() as { records?: StoredRecord[]; error?: string };
+      if (loadVersion !== weekLoadVersion.current) return;
       if (!response.ok) throw new Error(payload.error || "读取失败");
       if (!latestResponse.ok) throw new Error(latestPayload.error || "读取最新日期失败");
-      if (!historyResponse.ok) throw new Error(historyPayload.error || "读取历史一二级数据失败");
       setData(payload);
+      setSavedReportSnapshot(savedSnapshot);
       setLatestDates(latestPayload.latestDates || {});
       const loadedSpread = payload.records.filter(r => r.dataset_type === "spread").map(normalize);
-      const historicalSpread = (historyPayload.records || []).filter((row) => row.dataset_type === "spread").map(normalize);
-      setHistoricalSpreadRecords(historicalSpread);
+      const allSpread = savedHistory.map(normalize);
+      const historicalSpread = allSpread.filter(row => row.tradeDate >= historyStart && row.tradeDate <= historyEnd);
+      setCommentHistoryRecords(allSpread);
+      setSpreadSourceRecords(allSpread);
       setAnalysisStart(weekStart);
       setAnalysisEnd(fridayOf(weekStart));
       setChartRange({ start: weekStart, end: fridayOf(weekStart) });
@@ -408,9 +411,13 @@ export default function Workbench() {
       setChartAnalysisRecords([...historicalSpread, ...loadedSpread]);
       setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "读取失败");
-    } finally { setLoading(false); }
+      if (loadVersion === weekLoadVersion.current) setMessage(error instanceof Error ? error.message : "读取失败");
+    } finally { if (loadVersion === weekLoadVersion.current) setLoading(false); }
   }
+
+  useEffect(() => {
+    setCommentDrafts(previous => createPolicyCommentDrafts(commentPlanRecords, commentHistoryRecords, previous));
+  }, [commentPlanRecords, commentHistoryRecords]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => { void loadWeek(); });
@@ -418,6 +425,12 @@ export default function Workbench() {
     // loadWeek intentionally follows the selected week only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart]);
+
+  useEffect(() => {
+    if (active === "comment") void loadWeek();
+    // Re-entering comments also picks up homepage imports saved in another tab.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   async function upload(file: File, type: DatasetType) {
     if (uploadInProgress.current) {
@@ -430,11 +443,6 @@ export default function Workbench() {
       const parsed = type === "local_bond" ? await parseLocalBondFile(file)
         : type === "spread" ? await parseSpreadFile(file)
           : type === "maturity" ? await parseMaturityFile(file) : await parseIssuancePlanFile(file);
-      if (type === "spread") {
-        setSpreadSourceRecords(parsed);
-        setCommentHistoryRecords(parsed);
-        if (commentPlanRecords.length) setCommentDrafts(createPolicyCommentDrafts(commentPlanRecords, [...historicalSpreadRecords, ...parsed], commentDrafts));
-      }
       const recordWeekOf = (row: ParsedBondRecord) => type === "maturity" ? maturityWeekStart(row.tradeDate) : mondayOf(row.tradeDate);
       const detectedWeeks = new Set(parsed.map(recordWeekOf));
       const isHistoricalBase = detectedWeeks.size > 1;
@@ -675,9 +683,10 @@ export default function Workbench() {
       const mmdd = (d: string) => d.slice(5).replace("-", "");
       const previousStart = shiftWeek(weekStart, -1);
       const yearStart = `${weekStart.slice(0, 4)}-01-01`;
-      const [previousResponse, ytdLocalResponse] = await Promise.all([
+      const [previousResponse, ytdLocalResponse, savedSnapshot] = await Promise.all([
         workbenchRequest(`/api/workbench?weekStart=${previousStart}`),
         workbenchRequest(`/api/workbench?startDate=${yearStart}&endDate=${weekEnd}&datasetType=local_bond`),
+        loadReportSnapshot(),
       ]);
       const previousPayload = await previousResponse.json() as WeekData & { error?: string };
       const ytdLocalPayload = await ytdLocalResponse.json() as { records?: StoredRecord[]; error?: string };
@@ -690,14 +699,31 @@ export default function Workbench() {
       const localDaily = maturityDailyTotals(localMaturityRecords, weekStart);
       const previousRateMaturity = previousMaturityRecords.filter(row => maturityKind(row) === "rate").reduce((sum, row) => sum + (row.amount || 0), 0);
       const previousRateIssuance = previousSpreadRecords.reduce((sum, row) => sum + (row.amount || 0), 0);
+      const savedBaseline = reportBaseline(savedSnapshot, weekStart);
+      const baseline: ReportTotals | null = savedBaseline || (previousSpreadRecords.length ? {
+        weekStart: previousStart, savedAt: "", rateIssuance: previousRateIssuance,
+        rateNet: previousMaturityRecords.length ? previousRateIssuance - previousRateMaturity : null,
+        localIssuance: previousPayload.records.filter(row => row.dataset_type === "local_bond").reduce((sum, row) => sum + (row.amount || 0), 0),
+        localNet: null,
+      } : null);
       const maturity = maturityRecords.length ? {
         rateTotal,
         rateBreakdown: rateMaturityBreakdown(rateMaturityRecords),
         localDaily,
         localTotal: localMaturityRecords.reduce((sum, row) => sum + (row.amount || 0), 0),
-        previousRateNet: previousMaturityRecords.length ? previousRateIssuance - previousRateMaturity : undefined,
+        previousRateNet: baseline?.rateNet ?? undefined,
       } : undefined;
-      const blob = await buildWeeklyReportBlob({ weekStart, summary: rollingAnalysis.text, localRecords, spreadRecords, scheduleRecords: issuancePlanRecords, previousSpreadRecords, ytdLocalRecords, maturity });
+      const reportInput = { weekStart, summary: rollingAnalysis.text, localRecords, spreadRecords, scheduleRecords: issuancePlanRecords, previousSpreadRecords, previousRateIssuance: baseline?.rateIssuance, ytdLocalRecords, maturity };
+      const blob = await buildWeeklyReportBlob(reportInput);
+      let snapshotNotice = "本期数据已自动保存，供下周环比使用。";
+      try {
+        const saved = await saveReportSnapshot(reportTotals(reportInput), baseline);
+        setSavedReportSnapshot(saved);
+        if (saved.current.weekStart > weekStart) snapshotNotice = "已保留较新一期数据，未用旧周报覆盖。";
+      } catch (error) {
+        snapshotNotice = `周报已生成，但比较数据保存失败：${error instanceof Error ? error.message : "请重试"}。`;
+      }
+      const baselineNotice = !baseline ? "缺少上周数据，本次未计算环比，不按零处理。" : baseline.rateNet === null ? "上周到期数据缺失，未计算净融资环比。" : `环比基准：${baseline.weekStart} 当周${savedBaseline ? "已保存周报" : "已上传明细"}。`;
       const url = URL.createObjectURL(blob);
       const fileName = `利率债发行周报${weekStart.replaceAll("-", "")}-${mmdd(weekEnd)}.docx`;
       setReportDownload({ url, name: fileName });
@@ -706,7 +732,7 @@ export default function Workbench() {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setReportStatus(legacySpreadData ? "已生成；当前为旧版入库数据，空缺字段以“-”显示，重新上传一二级表可补全。" : maturityRecords.length ? "周报已按今日母版生成，并已写入本周到期数据。若未自动下载，请使用下方下载链接。" : "周报已生成，但本周尚未上传到期数据；到期及净融资项目未填充。" );
+      setReportStatus(`${legacySpreadData ? "已生成；旧版入库数据的空缺字段以“-”显示。" : "周报已生成。"}${baselineNotice}${snapshotNotice}若未自动下载，请使用下方下载链接。`);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "生成失败";
       setReportStatus(`生成失败：${reason}`);
@@ -753,7 +779,7 @@ export default function Workbench() {
                   onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
                   onDragLeave={() => setDragging(null)}
                   onDrop={event => dropFile(event, "local_bond")}
-                ><FileSpreadsheet/><span><em>周报取数 · 增量更新</em><strong>地方债发行明细</strong><small>拖入或点击上传 Excel<br/>自动去重，保留历史并更新修订值</small></span></button>
+                ><FileSpreadsheet/><span><em>周报取数 · 年度文件增量更新</em><strong>地方债发行明细</strong><small>每次上传最新年度 Excel 即可<br/>同次发行不重复累计，修订值更新原记录</small></span></button>
                 <div className="latest-date"><CalendarDays/><span>地方债明细最新日期</span><strong>{latestLocalDate}</strong></div>
               </div>
               <div className="upload-lane">
@@ -873,7 +899,7 @@ export default function Workbench() {
               <FileSpreadsheet/><span><small>第一步 · 今日发行</small><strong>{commentPlanFileName || "上传新债发行 Excel"}</strong><em>{commentDrafts.length ? `已转换 ${commentDrafts.length} 只政金债` : "自动过滤地方债与信用债"}</em></span>
             </button>
             <div className="comment-source-card comment-history-note">
-              <RefreshCw/><span><small>历史来源 · 首页统一管理</small><strong>一二级利差历史库</strong><em>最新日期 {commentHistoryLatestDate} · 当前可用 {commentHistorySource.length} 条记录</em></span>
+              <RefreshCw/><span><small>历史来源 · 首页统一管理</small><strong>一二级利差历史库</strong><em>{loading ? "正在同步首页历史库…" : `最新日期 ${commentHistoryLatestDate} · 当前可用 ${commentHistorySource.length} 条记录`}</em></span>
             </div>
           </div>
           {!commentDrafts.length ? <button className={`comment-drop ${commentDragTarget === "plan" ? "drag-active" : ""}`} onClick={() => commentPlanInput.current?.click()} disabled={commentLoading}
@@ -914,6 +940,8 @@ export default function Workbench() {
         </section>}
 
         {active === "report" && <section className="report-panel focus-panel">
+          <ManualReportBaseline key={weekStart} weekStart={weekStart} baseline={savedReportBaseline} disabled={reportLoading || loading} onSaved={setSavedReportSnapshot}/>
+          <div className="local-report-source"><p>上周比较数据：{savedReportBaseline ? `${savedReportBaseline.weekStart} 当周 · 国债政金债发行 ${savedReportBaseline.rateIssuance} 亿元，净融资 ${savedReportBaseline.rateNet === null ? "未提供" : `${Number(savedReportBaseline.rateNet.toFixed(4))} 亿元`}` : "尚无对应上周的已保存周报，生成时会尝试读取上周已上传明细；缺失则不计算环比。"}</p><p>生成成功后自动保存本期，供下一周使用；同周重生成保留上周比较基准，不建立多期归档。数据保存在当前浏览器。</p></div>
           <div className="local-report-source"><p>国债政金债发行量、利差及结果以一二级表为准。发行计划用于核对和补充时段；上弹、追加或特殊小团等差异由你核定，修改一二级表后重新上传即可。净融资按发行量减到期明细金额测算。</p></div>
           {reportWarnings.length > 0 && <details className="local-report-source report-reconciliation" open><summary>一二级与发行计划核对 · {reportWarnings.length} 项</summary><p>以下差异由你判断，生成周报继续采用一二级数据。</p><ul>{reportWarnings.map(note => <li key={note}>{note}</li>)}</ul></details>}
           <div className="local-report-source">

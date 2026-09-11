@@ -95,6 +95,31 @@ test("keeps stored fields when a later upload leaves them blank", () => {
   assert.deepEqual(record.raw?.__display, { 中标利率: "1.6800", 二级: "1.6800", 全场倍数: "6.12" });
 });
 
+test("annual local files can be repeated, expanded and corrected without cumulative double counting", () => {
+  const stored = new Map<string, RecordPayload>();
+  const upload = (rows: RecordPayload[]) => {
+    const counts = { added: 0, updated: 0, unchanged: 0 };
+    for (const row of consolidateBondRecords(rows)) {
+      const key = recordKey(row), existing = stored.get(key);
+      const update = prepareRecordUpdate(row, existing ? [existing] : []);
+      counts[!update.changed ? "unchanged" : existing ? "updated" : "added"]++;
+      stored.set(key, JSON.parse(JSON.stringify(update.record)));
+    }
+    return counts;
+  };
+  const annual = [
+    { tradeDate: "2026-01-05", bondCode: "2671001", amount: 10 },
+    { tradeDate: "2026-08-31", bondCode: "2671002X", amount: 20 },
+  ];
+  assert.deepEqual(upload(annual), { added: 2, updated: 0, unchanged: 0 });
+  assert.deepEqual(upload(annual), { added: 0, updated: 0, unchanged: 2 });
+  const next = [annual[0], { ...annual[1], amount: 25 }, { tradeDate: "2026-09-07", bondCode: "2671003", amount: 30 }];
+  assert.deepEqual(upload(next), { added: 1, updated: 1, unchanged: 1 });
+  assert.deepEqual(upload([...next, { ...next[1], bondCode: "2671002Z01.IB" }]), { added: 0, updated: 1, unchanged: 2 });
+  assert.equal(stored.size, 3);
+  assert.equal([...stored.values()].reduce((sum, r) => sum + r.amount!, 0), 65);
+});
+
 test("updates a stored field when the later upload supplies a revised value", () => {
   const { record, changed } = mergeRecord({
     tradeDate: "2026-08-14", bondCode: "260016", amount: 900,

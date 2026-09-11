@@ -67,21 +67,30 @@ test("local totals include all five categories for both weekly and year-to-date 
   }
 });
 
-test("DR review follows the edited reference: net-price result only and percentage valuation", async () => {
+test("DR review follows the final Word: winning yield and secondary net price", async () => {
   const bond: ParsedBondRecord = { tradeDate: "2026-09-01", bondCode: "09260409Z21", tenor: "2", bondType: "农发债", amount: 60, remark: "DR浮息，直投招标",
     raw: { __display: { 中标利率: "1.4930", 中标净价: "99.9767", 前一日估值: "1.4987", 二级: "99.9775元", 全场倍数: "4.82", 边际倍数: "2.75" } } };
   const xml = await reportXml([bond]);
-  assert.match(xml, /中标结果/);
-  assert.doesNotMatch(xml, /1\.4930/);
-  assert.match(xml, /净价 99\.9767元/);
-  assert.match(xml, />1\.4987%<\/w:t>/);
-  assert.match(xml, /净价 99\.9775元/);
+  assert.match(xml, /中标利率/);
+  assert.match(xml, />1\.4930<\/w:t>/);
+  assert.doesNotMatch(xml, /99\.9767/);
+  assert.match(xml, />1\.4987<\/w:t>/);
+  assert.match(xml, />99\.9775元<\/w:t>/);
   assert.match(xml, /今日直投招标发行1只农发清发债/);
   assert.equal(bond.raw?.__display && (bond.raw.__display as Record<string, string>).中标利率, "1.4930");
   const missing = { ...bond, raw: { __display: { 中标利率: "1.4930", 综收: "1.49" } } };
-  assert.match(await reportXml([missing]), /净价未提供/);
+  assert.match(await reportXml([missing]), />1\.4930<\/w:t>/);
+  assert.doesNotMatch(await reportXml([missing]), /净价未提供/);
   const legacy = { ...bond, raw: { __display: { 中标利率: "1.4930", 综收: "99.9767" } } };
-  assert.match(await reportXml([legacy]), /净价 99\.9767元/);
+  assert.match(await reportXml([legacy]), />1\.4930<\/w:t>/);
+  assert.doesNotMatch(await reportXml([legacy]), /99\.9767/);
+  const missingRate = { ...bond, raw: { __display: { 中标净价: "99.9767" } } };
+  assert.doesNotMatch(await reportXml([missingRate]), /99\.9767|1\.4930/);
+  const dr001 = { ...bond, bondCode: "092603001Z04", remark: "DR001浮息债，前台报价发行", raw: { __display: { 中标利率: "1.4100", 前一日估值: "1.41", 二级: "100.0685元" } } };
+  const dr001Xml = await reportXml([dr001]);
+  assert.match(dr001Xml, />1\.4100<\/w:t>/);
+  assert.match(dr001Xml, />1\.41<\/w:t>/);
+  assert.match(dr001Xml, />100\.0685元<\/w:t>/);
   assert.doesNotMatch(await reportXml([{ ...bond, bondCode: "09260409" }]), /净价 99\.9767元/);
   const quote = { ...bond, remark: "DR浮息，直投招标，前台报价发行" };
   assert.match(await reportXml([quote]), /今日直投报价发行1只农发清发债/);
