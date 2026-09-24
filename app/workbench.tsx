@@ -14,26 +14,10 @@ import { buildWeeklyReportBlob, reportDataWarnings, reportTotals } from "./lib/r
 import {
   createPolicyCommentDrafts, createTreasuryCommentDrafts, policyDraftResults, policyDraftSpreadRecords, PolicyCommentDraft, POLICY_FLOAT_RATE_OPTIONS,
 } from "./lib/policy-comment";
-import { LOCAL_STORAGE_MODE, loadSpreadHistory, loadReportSnapshot, loadSpreadWorkbookTemplate, saveReportSnapshot, saveSpreadWorkbookTemplate, workbenchRequest } from "./lib/workbench-request";
+import { LOCAL_STORAGE_MODE, loadSpreadHistory, loadReportSnapshot, saveReportSnapshot, workbenchRequest } from "./lib/workbench-request";
 import { reportBaseline, type ReportSnapshot, type ReportTotals } from "./lib/report-baseline";
 import ManualReportBaseline from "./manual-report-baseline";
-
-function buildUpdatedSpreadWorkbookInBackground(templateBytes: ArrayBuffer, drafts: PolicyCommentDraft[], plans: ParsedBondRecord[], tradeDate: string) {
-  return new Promise<ArrayBuffer>((resolve, reject) => {
-    const worker = new Worker(new URL("./lib/policy-comment-export.worker.ts", import.meta.url), { type: "module" });
-    const finish = () => worker.terminate();
-    worker.onmessage = (event: MessageEvent<{ ok: boolean; bytes?: ArrayBuffer; error?: string }>) => {
-      finish();
-      if (event.data.ok && event.data.bytes) resolve(event.data.bytes);
-      else reject(new Error(event.data.error || "生成完整一二级表失败"));
-    };
-    worker.onerror = (event) => {
-      finish();
-      reject(new Error(event.message || "后台生成完整一二级表失败"));
-    };
-    worker.postMessage({ templateBytes, drafts, plans, tradeDate }, [templateBytes]);
-  });
-}
+import { buildDailySpreadInputWorkbook } from "./lib/policy-comment-workbook";
 
 type StoredRecord = ParsedBondRecord & {
   id: number;
@@ -523,11 +507,10 @@ export default function Workbench() {
         throw new Error(`部分记录未能保存（已新增${added}条、更新${updated}条）。${failures.map(result => String(result.reason instanceof Error ? result.reason.message : result.reason)).join("；")}。请重新上传，已成功记录不会重复计入。`);
       }
       const result = `新增${added}条，更新${updated}条，保留${unchanged}条未变化记录`;
-      if (type === "spread") await saveSpreadWorkbookTemplate(file);
       await loadWeek();
       const sourceDates = parsed.map(row => row.tradeDate).sort();
       const sourceTotal = parsed.reduce((sum, row) => sum + (row.amount || 0), 0);
-      setMessage(`已识别 ${parsed.length} 条，合计 ${Number(sourceTotal.toFixed(4))} 亿元，覆盖 ${sourceDates[0]} 至 ${sourceDates.at(-1)}。已保存 ${groups.size} 个交易周：${result}${type === "local_bond" ? "。地方债明细已接入周报，续发券一并计入" : type === "spread" ? "。该文件已设为当前一二级底稿，发行点评页可直接追加当天国债和政金债" : ""}`);
+      setMessage(`已识别 ${parsed.length} 条，合计 ${Number(sourceTotal.toFixed(4))} 亿元，覆盖 ${sourceDates[0]} 至 ${sourceDates.at(-1)}。已保存 ${groups.size} 个交易周：${result}${type === "local_bond" ? "。地方债明细已接入周报，续发券一并计入" : type === "spread" ? "。历史一二级数据已同步，可供发行点评自动查找对照券" : ""}`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "上传失败"); }
     finally { uploadInProgress.current = false; }
   }
@@ -704,26 +687,21 @@ export default function Workbench() {
     }
     setCommentExporting(true);
     try {
-      const template = await loadSpreadWorkbookTemplate();
-      if (!template) {
-        setMessage("请先在首页重新上传最新的一二级 Excel。系统需要保留原工作簿，才能在原表下方继续追加。");
-        return;
-      }
-      setMessage(`正在把 ${effectiveCommentDate} 的发行信息追加到当前底稿 ${template.fileName}，完成后会自动下载…`);
+      setMessage(`正在整理 ${effectiveCommentDate} 可用于一二级表的已确认信息…`);
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
       const dayDrafts = commentDrafts.filter((draft) => draft.tradeDate === effectiveCommentDate);
-      const bytes = await buildUpdatedSpreadWorkbookInBackground(template.bytes, dayDrafts, commentPlanRecords, effectiveCommentDate);
+      const bytes = buildDailySpreadInputWorkbook(dayDrafts, commentPlanRecords, effectiveCommentDate);
       const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `利率债一二级分析${effectiveCommentDate.slice(5).replaceAll("-", "")}.xlsx`;
+      anchor.download = `今日一二级待粘贴${effectiveCommentDate.slice(5).replaceAll("-", "")}.xlsx`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
-      setMessage(`已在 ${template.fileName} 的现有数据后追加 ${dayPlans.length} 只当日国债及政金债；已存在的同日同券更新原行，未确认字段保持空白。`);
+      setMessage(`已生成 ${dayPlans.length} 只当日国债及政金债的待粘贴信息；同场次按期限排列，不能确认的字段保持空白。`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "生成完整一二级表失败");
+      setMessage(error instanceof Error ? error.message : "生成今日待粘贴表失败");
     } finally {
       setCommentExporting(false);
     }
@@ -831,7 +809,7 @@ export default function Workbench() {
       }
       const baselineNotice = !baseline ? "缺少上周数据，本次未计算环比，不按零处理。" : baseline.rateNet === null ? "上周到期数据缺失，未计算净融资环比。" : `环比基准：${baseline.weekStart} 当周${savedBaseline ? "已保存周报" : "已上传明细"}。`;
       const url = URL.createObjectURL(blob);
-      const fileName = `利率债发行周报${weekStart.replaceAll("-", "")}-${mmdd(reportWeekEnd)}.docx`;
+      const fileName = `利率债发行周报${weekStart.replaceAll("-", "")}-${mmdd(weekEnd)}.docx`;
       setReportDownload({ url, name: fileName });
       const a = document.createElement("a"); a.href = url;
       a.download = fileName;
@@ -857,7 +835,7 @@ export default function Workbench() {
 
       <section className="workspace">
         <header className="topbar">
-          <div><p className="eyebrow">{viewCopy[active].eyebrow}</p><h1>{viewCopy[active].title}</h1><p>{viewCopy[active].description}{active === "local" || active === "comment" ? "" : ` · ${active === "report" ? `${formatMd(weekStart)}—${formatMd(reportWeekEnd)}` : displayWeek(weekStart)}`}</p></div>
+          <div><p className="eyebrow">{viewCopy[active].eyebrow}</p><h1>{viewCopy[active].title}</h1><p>{viewCopy[active].description}{active === "local" || active === "comment" ? "" : ` · ${displayWeek(weekStart)}`}</p></div>
           {active !== "local" && active !== "comment" && <div className="week-picker"><button aria-label="上一周" onClick={() => setWeekStart(shiftWeek(weekStart,-1))}><ChevronLeft/></button><input type="date" value={weekStart} onChange={e => setWeekStart(mondayOf(e.target.value))}/><button aria-label="下一周" onClick={() => setWeekStart(shiftWeek(weekStart,1))}><ChevronRight/></button></div>}
         </header>
 
@@ -1024,10 +1002,10 @@ export default function Workbench() {
               <div><Check/><span><small>当日填写区</small><strong>{commentPlanFileName} · 全部 {commentDrafts.length} 只国债/政金债</strong></span></div>
               <label><span>发行日期</span><select value={effectiveCommentDate} onChange={event => setCommentSelectedDate(event.target.value)}>{commentDates.map(date => <option key={date} value={date}>{date}</option>)}</select></label>
               <button className="range-generate" onClick={copySelectedComments} disabled={!selectedCompletedComments.length}><Copy/>复制已选{selectedCompletedComments.length ? `（${selectedCompletedComments.length}）` : ""}</button>
-              <button className="secondary" onClick={() => void downloadCommentWorkbook()} disabled={commentExporting || !commentPlanRecords.some((row) => row.tradeDate === effectiveCommentDate)}>{commentExporting ? <LoaderCircle className="spin"/> : <Download/>}{commentExporting ? "追加中" : "追加今日信息并下载"}</button>
+              <button className="secondary" onClick={() => void downloadCommentWorkbook()} disabled={commentExporting || !commentPlanRecords.some((row) => row.tradeDate === effectiveCommentDate)}>{commentExporting ? <LoaderCircle className="spin"/> : <Download/>}{commentExporting ? "整理中" : "下载今日待粘贴表"}</button>
               <button className="secondary" onClick={() => void saveCompletedCommentsToSpread()} disabled={!completedComments.length || commentSaving}>{commentSaving ? <LoaderCircle className="spin"/> : <FileSpreadsheet/>}{commentSaving ? "更新中" : `更新一二级（${completedComments.length}）`}</button>
             </div>
-            <div className="comment-audit"><Check/><span>{commentKind === "policy" ? "政金债" : "国债"}同一发行场次按期限由短到长排列。以首页最新上传的一二级完整表为当前底稿，只追加当天国债和政金债；同日同券不重复，未确认字段留白。</span></div>
+            <div className="comment-audit"><Check/><span>{commentKind === "policy" ? "政金债" : "国债"}同一发行场次按期限由短到长排列。下载表沿用正式一二级表的列顺序，只填写系统能够确认的信息，空白字段由你粘贴后补齐。</span></div>
             <div className="comment-entry-table-wrap"><table className="comment-entry-table">
               <thead><tr><th className="comment-select-column"><input type="checkbox" aria-label="全选已完成的小结" checked={allCompletedSelected} disabled={!completedComments.length} onChange={toggleAllCompletedComments}/></th><th>债券</th><th>发行类型</th><th>浮息类型</th><th>比较基准</th><th>参考券（选填）</th><th>二级收益率 / 净价</th><th>最终中标率 / 中标净价</th><th>自动文字详情</th></tr></thead>
               <tbody>{visibleCommentResults.map(({ draft, comment, missing }) => {

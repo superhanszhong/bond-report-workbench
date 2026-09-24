@@ -114,6 +114,10 @@ function isTreasury(row: ParsedBondRecord) {
   return row.bondType === "国债" || /财政部/.test(row.issuer || "");
 }
 
+function isDiscountTreasury(row: ParsedBondRecord) {
+  return isTreasury(row) && /D$/i.test(tenorLabel(row.tenor || ""));
+}
+
 function isDr(row: ParsedBondRecord) {
   return isReopenedBondCode(row.bondCode || "") && /DR(?:001|007)?浮息债/i.test(`${row.summaryMeta?.rateType || ""}${row.remark || ""}`);
 }
@@ -183,13 +187,42 @@ function previousFor(row: ParsedBondRecord, records: ParsedBondRecord[]): Previo
   };
 }
 
+function previousDiscountTreasury(row: ParsedBondRecord, records: ParsedBondRecord[]): PreviousSnapshot | undefined {
+  if (!isDiscountTreasury(row)) return undefined;
+  const tenor = tenorLabel(row.tenor || "");
+  const previous = records.filter((candidate) => (
+    candidate !== row
+    && candidate.tradeDate < row.tradeDate
+    && isDiscountTreasury(candidate)
+    && tenorLabel(candidate.tenor || "") === tenor
+    && !isReopenedBondCode(candidate.bondCode || "")
+  )).sort((left, right) => right.tradeDate.localeCompare(left.tradeDate)
+    || String(right.bondCode || "").localeCompare(String(left.bondCode || "")))[0];
+  if (!previous) return undefined;
+  return {
+    date: previous.tradeDate,
+    code: previous.bondCode || "",
+    comparisonType: "discount_comparator",
+    displaySpreadText: previous.summaryMeta?.displaySpreadText || "",
+    auctionSpreadText: previous.summaryMeta?.auctionSpreadText || "",
+    allInText: previous.summaryMeta?.allInText || "",
+    secondaryText: previous.summaryMeta?.secondaryText || "",
+    note: previous.remark || "",
+    spread: previous.spread ?? null,
+  };
+}
+
 function issueDescription(row: ParsedBondRecord) {
   const code = row.bondCode || "";
   const reopened = isReopenedBondCode(code);
-  const action = reopened ? "增发" : "新发";
+  const action = reopened ? (isTreasury(row) ? "续发" : "增发") : "新发";
   const issuer = issuerLabel(row);
   const maturity = tenorLabel(row.tenor || "");
-  if (isTreasury(row)) return `今日${action}${maturity}${/D$/i.test(maturity) ? "贴现国债" : "国债"}`;
+  if (isTreasury(row)) {
+    if (/D$/i.test(maturity)) return `今日${action}贴现国债${maturity}`;
+    const name = `${row.shortName || ""}${row.fullName || ""}`;
+    return `今日${action}${/超长.*特|超长特别/.test(name) ? "超长特别国债" : "国债"}${maturity}`;
+  }
   const rateType = selectedRateType(row);
   const route = row.summaryMeta?.route || row.issuanceRoute || "";
   const clearing = /^DR/.test(rateType) || /^09/.test(code) || /清发|上清所/.test(`${row.shortName || ""}${route}${row.remark || ""}`);
@@ -205,24 +238,30 @@ function ordinaryComment(row: ParsedBondRecord, records: ParsedBondRecord[]): Po
     return winning === null || secondary === null ? null : Number(((winning - secondary) * 100).toFixed(2));
   })();
   const reopened = isReopenedBondCode(row.bondCode || "");
-  const previous = reopened ? previousFor(row, records) : undefined;
+  const discountTreasury = isDiscountTreasury(row);
+  const previous = reopened ? previousFor(row, records) : discountTreasury ? previousDiscountTreasury(row, records) : undefined;
   const previousText = normalized(previous?.auctionSpreadText || "");
-  const previousValue = bpValue(previousText);
+  const previousValue = bpValue(previousText) ?? previous?.spread ?? null;
   const compare = comparison(currentText, meta?.secondaryText || "");
-  const comparisonPrefix = /^(?:二级|估值曲线|估值|估价|中间价|价格|曲线)$/.test(compare.label) ? "" : "较";
+  const treasury = isTreasury(row);
+  const comparisonPrefix = treasury || /^(?:二级|估值曲线|估值|估价|中间价|价格|曲线)$/.test(compare.label) ? "" : "较";
   const side = current === null ? "" : current > 0 ? "高" : current < 0 ? "低" : "平";
   const resultLabel = (meta?.route || row.issuanceRoute) === "报价发行" ? "报价利率" : "中标利率";
   const winning = percentNumber(meta?.winningRateText || "");
-  const resultPrefix = `${resultLabel}${winning === null ? "" : `${compactNumber(winning, 4)}%`}`;
+  const resultPrefix = treasury ? "" : `${resultLabel}${winning === null ? "" : `${compactNumber(winning, 4)}%`}`;
+  const resultLead = resultPrefix ? `${resultPrefix} ` : "";
   const firstLine = current === null
     ? "缺少中标利差，无法生成"
     : current === 0
-      ? `${resultPrefix} 平${comparisonPrefix}${compare.label}${compare.quote ? `(${compare.quote})` : ""}`
-      : `${resultPrefix} ${side}${comparisonPrefix}${compare.label}${compare.quote ? `(${compare.quote})` : ""}${Math.abs(current).toFixed(2)}BP`;
-  const movement = !reopened ? "不判断" : current !== null && previousValue !== null ? direction(previousValue, current) : "待确认";
-  const secondLine = reopened
-    ? `${issueDescription(row)},利差${movement}(${previousText ? `上次${previousText}` : "暂无上次同券发行记录"})`
-    : issueDescription(row);
+      ? `${resultLead}平${comparisonPrefix}${compare.label}${compare.quote ? `(${compare.quote})` : ""}`
+      : `${resultLead}${side}${comparisonPrefix}${compare.label}${compare.quote ? `(${compare.quote})` : ""}${Math.abs(current).toFixed(2)}BP`;
+  const comparesHistory = reopened || discountTreasury;
+  const movement = !comparesHistory ? "不判断" : current !== null && previousValue !== null ? direction(previousValue, current) : "待确认";
+  const secondLine = discountTreasury && previous && previousValue !== null
+    ? `${issueDescription(row)},利差${movement}(老券${displayBondCode(previous.code)}新发时一二级利差为${compactNumber(previousValue, 2)})`
+    : reopened
+      ? `${issueDescription(row)},利差${movement}(${previousText ? `上次${previousText}` : "暂无上次同券发行记录"})`
+      : issueDescription(row);
   return {
     key: `${row.tradeDate}|${row.bondCode || ""}`,
     tradeDate: row.tradeDate,
@@ -237,7 +276,13 @@ function ordinaryComment(row: ParsedBondRecord, records: ParsedBondRecord[]): Po
     firstLine,
     secondLine,
     text: `${firstLine}\n${secondLine}`,
-    warning: current === null ? "未识别到中标比二级利差" : reopened && previousValue === null ? "未找到可解析的上次同券利差" : undefined,
+    warning: current === null
+      ? "未识别到中标比二级利差"
+      : reopened && previousValue === null
+        ? "未找到可解析的上次同券利差"
+        : discountTreasury && previousValue === null
+          ? "未找到最近一期同期限贴现国债利差"
+          : undefined,
   };
 }
 
@@ -363,6 +408,9 @@ function createCommentDrafts(planRecords: ParsedBondRecord[], history: ParsedBon
     const previousText = previous?.summaryMeta?.auctionSpreadText || previous?.summaryMeta?.displaySpreadText || "";
     const nextBenchmarkType = previousDraft?.benchmarkType || benchmarkKind(previousText, drPricing);
     const raw = row.raw || {};
+    const defaultFinalValue = isTreasury(row)
+      ? inputRate(raw.边际利率) || inputRate(raw.加权利率 ?? raw.发行利率)
+      : inputRate(raw.加权利率 ?? raw.发行利率);
     return {
       id,
       tradeDate: row.tradeDate,
@@ -377,7 +425,7 @@ function createCommentDrafts(planRecords: ParsedBondRecord[], history: ParsedBon
       benchmarkType: nextBenchmarkType,
       referenceBond: previousDraft?.referenceBond || "",
       benchmarkValue: previousDraft?.benchmarkValue || "",
-      finalValue: previousDraft?.finalValue || (drPricing ? "" : inputRate(raw.加权利率 ?? raw.发行利率)),
+      finalValue: previousDraft?.finalValue || (drPricing ? "" : defaultFinalValue),
       sequenceCheck: sequenceCheck(row, history),
     } satisfies PolicyCommentDraft;
   });

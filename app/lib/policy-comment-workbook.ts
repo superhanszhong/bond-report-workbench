@@ -4,6 +4,13 @@ import { policyDraftSpreadRecords, type PolicyCommentDraft } from "./policy-comm
 import { recordKey } from "./record-merge";
 import { normalizeBondCode } from "./bond-code";
 
+const SPREAD_HEADERS = [
+  "发行日期", "代码", "期限", "发行量", "中标利率", "综收", "中标比二级(bp)", "全场倍数", "边际倍数",
+  "首场边际投标量（亿）", "首场边际中标量（亿）", "追加场倍数", "备注", "修正久期", "每100亏几毛", "发行人",
+  "代码1", "估值获取日期", "前一日估值", "前一日估值1", "截标前二级价格", "修正久期1", "综收-二级", "中标-二级",
+  "募集用途", "备注", "综收比二级(bp)", "", "", "", "债券代码", "久期",
+] as const;
+
 function numeric(value = "") {
   const clean = value.trim();
   if (!clean) return "";
@@ -25,6 +32,105 @@ function maturityYears(value = "") {
   if (/D$/.test(source)) return number / 365;
   if (/M$/.test(source)) return number / 12;
   return number;
+}
+
+function excelDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day, 12);
+}
+
+function rawNumber(raw: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const source = raw[key];
+    if (source === null || source === undefined || source === "") continue;
+    const parsed = Number(String(source).replace(/[^\d.-]/g, ""));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return "";
+}
+
+function plansForDate(plans: ParsedBondRecord[], tradeDate: string) {
+  const sessionOrder = new Map<string, number>();
+  const selected = plans.filter((plan) => plan.tradeDate === tradeDate && ["国债", "国开债", "口行债", "农发债"].includes(plan.bondType || ""));
+  selected.forEach((plan) => {
+    const session = `${plan.issuer}|${plan.issuanceRoute}|${plan.bidTime}`;
+    if (!sessionOrder.has(session)) sessionOrder.set(session, sessionOrder.size);
+  });
+  return selected.sort((left, right) => {
+    const leftSession = `${left.issuer}|${left.issuanceRoute}|${left.bidTime}`;
+    const rightSession = `${right.issuer}|${right.issuanceRoute}|${right.bidTime}`;
+    return sessionOrder.get(leftSession)! - sessionOrder.get(rightSession)!
+      || maturityYears(left.tenor || "") - maturityYears(right.tenor || "")
+      || String(left.bondCode).localeCompare(String(right.bondCode));
+  });
+}
+
+export function buildDailySpreadInputWorkbook(drafts: PolicyCommentDraft[], plans: ParsedBondRecord[], tradeDate: string) {
+  const draftByKey = new Map(drafts.map((draft) => [recordKey(draft), draft]));
+  const completedByKey = new Map(policyDraftSpreadRecords(drafts, plans).map((record) => [recordKey(record), record]));
+  const rows = plansForDate(plans, tradeDate).map((plan) => {
+    const key = recordKey(plan);
+    const draft = draftByKey.get(key);
+    const completed = completedByKey.get(key);
+    const dr = Boolean(draft && /[XZ]\d*$/i.test(draft.bondCode) && /^DR(?:001|007)?浮息债$/i.test(draft.rateType));
+    const ownSecondary = Boolean(draft && !draft.referenceBond?.trim() && draft.benchmarkType === "二级");
+    const ownValuation = Boolean(draft && !draft.referenceBond?.trim() && /估值|估价/.test(draft.benchmarkType));
+    const finalValue = draft ? numeric(draft.finalValue) : "";
+    const benchmarkValue = draft ? numeric(draft.benchmarkValue) : "";
+    const numericSpread = ownSecondary && !dr && finalValue !== "" && benchmarkValue !== ""
+      ? Number(((finalValue - benchmarkValue) * 100).toFixed(2)) : "";
+    const routeNote = plan.issuanceRoute === "报价发行" ? "前台报价发行" : plan.issuanceRoute === "上清所" ? "上清所" : "";
+    const raw = plan.raw || {};
+    const row = Array.from({ length: SPREAD_HEADERS.length }, () => "" as string | number | Date);
+    row[0] = excelDate(tradeDate);
+    row[1] = normalizeBondCode(plan.bondCode);
+    row[2] = Number.isFinite(Number(plan.tenor)) ? Number(plan.tenor) : plan.tenor || "";
+    row[3] = plan.amount ?? "";
+    if (finalValue !== "") row[dr ? 5 : 4] = dr ? `${finalValue}元` : finalValue / 100;
+    if (completed?.summaryMeta?.auctionSpreadText) row[6] = numericSpread === "" ? completed.summaryMeta.auctionSpreadText : numericSpread;
+    row[7] = rawNumber(raw, "全场倍数");
+    row[8] = rawNumber(raw, "边际倍数");
+    row[9] = rawNumber(raw, "首场边际投标量（亿）", "边际投标量（亿）");
+    row[10] = rawNumber(raw, "首场边际中标量（亿）", "边际中标量（亿）");
+    row[11] = rawNumber(raw, "追加场倍数");
+    row[12] = [draft?.rateType, routeNote].filter(Boolean).join("，");
+    row[15] = plan.issuer || "";
+    if (ownValuation && benchmarkValue !== "") {
+      row[18] = benchmarkValue;
+      row[19] = benchmarkValue / 100;
+    }
+    if (ownSecondary && benchmarkValue !== "") {
+      row[20] = dr ? `${benchmarkValue}元` : benchmarkValue / 100;
+      if (!dr && finalValue !== "") row[23] = Number(((finalValue - benchmarkValue) * 100).toFixed(2));
+    }
+    row[30] = `${normalizeBondCode(plan.bondCode)}.IB`;
+    return row;
+  });
+  const sheet = XLSX.utils.aoa_to_sheet([SPREAD_HEADERS, ...rows]);
+  sheet["!autofilter"] = { ref: `A1:AF${Math.max(rows.length + 1, 1)}` };
+  sheet["!freeze"] = { xSplit: 2, ySplit: 1, topLeftCell: "C2", activePane: "bottomRight", state: "frozen" };
+  sheet["!cols"] = [12, 17, 10, 11, 13, 13, 20, 11, 11, 18, 18, 13, 22, 12, 14, 22, 16, 14, 14, 14, 18, 14, 14, 14, 16, 14, 18, 5, 5, 5, 18, 12]
+    .map((width) => ({ wch: width }));
+  for (let column = 0; column < SPREAD_HEADERS.length; column += 1) {
+    const cell = sheet[XLSX.utils.encode_cell({ r: 0, c: column })];
+    if (cell) cell.s = {
+      font: { name: "微软雅黑", sz: 10, bold: true, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "8F5148" } },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+    };
+  }
+  rows.forEach((_, index) => {
+    const row = index + 1;
+    const dateCell = sheet[XLSX.utils.encode_cell({ r: row, c: 0 })];
+    if (dateCell) dateCell.z = "yyyy-mm-dd";
+    [4, 20].forEach((column) => {
+      const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })];
+      if (cell && typeof cell.v === "number") cell.z = "0.0000%";
+    });
+  });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "今日待粘贴");
+  return XLSX.write(workbook, { type: "array", bookType: "xlsx", cellStyles: true }) as ArrayBuffer;
 }
 
 function cloneStyle(value: unknown) {
@@ -70,19 +176,7 @@ export function buildUpdatedSpreadWorkbook(templateBytes: ArrayBuffer, drafts: P
   if (!lastDataRow) throw new Error("一二级底稿没有可复制的数据行");
   const draftByKey = new Map(drafts.map((draft) => [recordKey(draft), draft]));
   const completedByKey = new Map(policyDraftSpreadRecords(drafts, plans).map((record) => [recordKey(record), record]));
-  const sessionOrder = new Map<string, number>();
-  const selected = plans.filter((plan) => plan.tradeDate === tradeDate && ["国债", "国开债", "口行债", "农发债"].includes(plan.bondType || ""));
-  selected.forEach((plan) => {
-    const session = `${plan.issuer}|${plan.issuanceRoute}|${plan.bidTime}`;
-    if (!sessionOrder.has(session)) sessionOrder.set(session, sessionOrder.size);
-  });
-  selected.sort((left, right) => {
-    const leftSession = `${left.issuer}|${left.issuanceRoute}|${left.bidTime}`;
-    const rightSession = `${right.issuer}|${right.issuanceRoute}|${right.bidTime}`;
-    return sessionOrder.get(leftSession)! - sessionOrder.get(rightSession)!
-      || maturityYears(left.tenor || "") - maturityYears(right.tenor || "")
-      || String(left.bondCode).localeCompare(String(right.bondCode));
-  });
+  const selected = plansForDate(plans, tradeDate);
   const assign = (row: number, column: number, value: unknown, format?: string) => {
     const address = XLSX.utils.encode_cell({ r: row, c: column });
     const prior = sheet[address];

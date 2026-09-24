@@ -424,9 +424,10 @@ export async function buildWeeklyReportBlob({
   const tables = directElements(body, "tbl");
   if (paragraphs.length < 31 || tables.length < 7) throw new Error("周报母版版式与预期不一致");
 
-  const scheduledWeekEnd = fridayOf(weekStart);
-  const weekEnd = reportEndDate && reportEndDate >= weekStart && reportEndDate <= scheduledWeekEnd ? reportEndDate : scheduledWeekEnd;
+  const weekEnd = fridayOf(weekStart);
+  const reviewEnd = reportEndDate && reportEndDate >= weekStart && reportEndDate <= weekEnd ? reportEndDate : weekEnd;
   const dates = reportDates(weekStart, weekEnd);
+  const reviewDates = reportDates(weekStart, reviewEnd);
   const currentAmount = amount(spreadRecords);
   for (const row of [...spreadRecords, ...localRecords, ...ytdLocalRecords]) {
     if (row.amount === null || row.amount === undefined || !Number.isFinite(row.amount) || row.amount < 0) throw new Error(`${row.tradeDate} ${row.bondCode} 发行量缺失或无效，请更新对应底稿`);
@@ -476,7 +477,7 @@ export async function buildWeeklyReportBlob({
   rewriteParagraph(paragraphs[5], `${yyyymmdd(weekStart)}-${yyyymmdd(weekEnd)}本周利率债发行情况表`);
 
   const weeklyRows = directElements(tables[1], "tr");
-  const dailyRate = dates.map((date) => sortReportBonds(spreadRecords.filter((row) => row.tradeDate === date)));
+  const dailyRate = reviewDates.map((date) => sortReportBonds(spreadRecords.filter((row) => row.tradeDate === date)));
   // 一二级表是发行量与债券明细的唯一口径；发行计划表只补充上午/下午时段。
   const plannedRate = mergeIssuanceSessions(spreadRecords, scheduleRecords);
   const dailyPlannedRate = dates.map((date) => plannedRate.filter((row) => row.tradeDate === date));
@@ -484,7 +485,7 @@ export async function buildWeeklyReportBlob({
   rewriteSizedRow(weeklyRows[0], ["", ...dates.map(weekday)]);
   rewriteSizedRow(weeklyRows[1], ["上午", ...dailyPlannedRate.map((rows) => dailyPlan(rows, "上午"))]);
   rewriteSizedRow(weeklyRows[2], ["下午", ...dailyPlannedRate.map((rows) => dailyPlan(rows, "下午"))]);
-  rewriteSizedRow(weeklyRows[3], [`国债政金债合计\n${text(amount(plannedRate))}亿`, ...dailyPlannedRate.map((rows) => text(amount(rows)))]);
+  rewriteSizedRow(weeklyRows[3], [`国债政金债合计\n${text(amount(plannedRate))}亿`, ...dailyPlannedRate.map((rows) => rows.length ? text(amount(rows)) : "-")]);
   rewriteRow(weeklyRows[4], ["本周合计", varietyTotals(plannedRate)]);
   rewriteSizedRow(weeklyRows[5], [`地方债\n${text(localTotal)}亿`, ...dailyLocal.map((rows) => rows.length ? text(amount(rows)) : "-")]);
   if (maturity) {
@@ -497,7 +498,7 @@ export async function buildWeeklyReportBlob({
 
   const headingParagraphs = [8, 13, 18, 22, 26];
   const leadParagraphs = [9, 14, 19, 23, 27];
-  dates.forEach((date, index) => {
+  reviewDates.forEach((date, index) => {
     const rows = dailyRate[index];
     rewriteParagraph(paragraphs[headingParagraphs[index]], `${formatMd(date)} 回顾（${weekday(date)}）`);
     rewriteParagraph(paragraphs[leadParagraphs[index]], dailyLead(rows));
@@ -510,7 +511,7 @@ export async function buildWeeklyReportBlob({
     setParagraphFlag(paragraphs[leadParagraphs[index]], "keepNext");
     keepTableTogether(tables[index + 2]);
   });
-  for (let index = dates.length; index < 5; index += 1) {
+  for (let index = reviewDates.length; index < 5; index += 1) {
     body.removeChild(paragraphs[headingParagraphs[index]]);
     body.removeChild(paragraphs[leadParagraphs[index]]);
     body.removeChild(tables[index + 2]);

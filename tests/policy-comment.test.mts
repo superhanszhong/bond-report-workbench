@@ -3,7 +3,7 @@ import test from "node:test";
 import XLSX from "xlsx-js-style";
 import type { ParsedBondRecord, SpreadSummaryMeta } from "../app/lib/workbench";
 import { createPolicyCommentDrafts, createTreasuryCommentDrafts, policyComments, policyDraftResults, policyDraftSpreadRecords, type PolicyCommentDraft } from "../app/lib/policy-comment";
-import { buildUpdatedSpreadWorkbook } from "../app/lib/policy-comment-workbook";
+import { buildDailySpreadInputWorkbook } from "../app/lib/policy-comment-workbook";
 
 function meta(overrides: Partial<SpreadSummaryMeta>): SpreadSummaryMeta {
   return {
@@ -298,44 +298,82 @@ test("国债点评独立生成并按同场期限排序", () => {
   const drafts = createTreasuryCommentDrafts(plans, []).map((draft) => ({ ...draft, benchmarkValue: "1.45", finalValue: "1.44" }));
   assert.deepEqual(drafts.map((draft) => draft.bondCode), ["269950", "260020X2"]);
   const comments = policyDraftResults(drafts, []);
-  assert.match(comments[0].comment?.text || "", /今日新发182D贴现国债/);
-  assert.match(comments[1].comment?.text || "", /今日增发10Y国债/);
+  assert.match(comments[0].comment?.text || "", /今日新发贴现国债182D/);
+  assert.match(comments[1].comment?.text || "", /今日续发国债10Y/);
 });
 
-test("下载时保留原一二级工作簿并在末尾追加当日国债和政金债", () => {
-  const headers = ["发行日期", "代码", "期限", "发行量", "中标利率", "综收", "中标比二级(bp)", "全场倍数", "边际倍数", "首场边际投标量（亿）", "首场边际中标量（亿）", "追加场倍数", "备注", "修正久期", "每100亏几毛", "发行人", "代码1", "估值获取日期", "前一日估值", "前一日估值1", "截标前二级价格", "修正久期1", "综收-二级", "中标-二级", "募集用途", "备注", "综收比二级(bp)", "", "", "", "债券代码", "久期"];
-  const sourceBook = XLSX.utils.book_new();
-  const sourceSheet = XLSX.utils.aoa_to_sheet([headers, ["2026-09-23", "260410Z21", 10, 90, 0.017689, 0.017824, -1.31, 3.99, 18.25, 93.1, 5.1, "", "", 8.8765, "", "中国农业发展银行", "", "2026-09-22", 1.7805, "", 0.01782]]);
-  sourceSheet.O2 = { t: "n", f: "N2*G2/10", v: -1.1628 };
-  sourceSheet.T2 = { t: "n", f: "S2/100", v: 0.017805 };
-  sourceSheet.W2 = { t: "n", f: "(F2-U2)*10000", v: 0.04 };
-  sourceSheet.X2 = { t: "n", f: "(E2-U2)*10000", v: -1.31 };
-  sourceSheet.XFA10 = { t: "z", v: "", s: { fill: { fgColor: { rgb: "FFFFFF" } } } };
-  sourceSheet["!ref"] = "A1:XFA10";
-  XLSX.utils.book_append_sheet(sourceBook, sourceSheet, "Sheet1");
-  XLSX.utils.book_append_sheet(sourceBook, XLSX.utils.aoa_to_sheet([["保留工作表"], [123]]), "国开调整");
-  const template = XLSX.write(sourceBook, { type: "array", bookType: "xlsx", cellStyles: true }) as ArrayBuffer;
+test("新发贴现国债对比最近日期同期限贴现国债的新发利差", () => {
+  const treasury = (bondCode: string, tradeDate: string, tenor: string, spreadText: string): ParsedBondRecord => ({
+    tradeDate, bondCode, issuer: "中华人民共和国财政部", bondType: "国债", tenor,
+    summaryMeta: meta({ baseCode: bondCode, auctionSpreadText: spreadText, displaySpreadText: spreadText }),
+  });
+  const rows: ParsedBondRecord[] = [
+    treasury("269940", "2026-08-20", "28D", "-7.20(较估值(1.2))"),
+    treasury("269958", "2026-09-17", "28D", "-8.84(较估值(1.1))"),
+    treasury("269947", "2026-09-10", "91D", "-2.13(较估值(1.2))"),
+    { ...treasury("269959", "2026-09-24", "28D", "-14.53(较269942估值(1.1498))"), summaryMeta: meta({ baseCode: "269959", auctionSpreadText: "-14.53(较269942估值(1.1498))", winningRateText: "0.9131%", secondaryText: "1.1498%" }) },
+    { ...treasury("269960", "2026-09-24", "91D", "-2.15(较269958估值(1.18))"), summaryMeta: meta({ baseCode: "269960", auctionSpreadText: "-2.15(较269958估值(1.18))", winningRateText: "1.1585%", secondaryText: "1.18%" }) },
+  ];
+  const results = new Map(policyComments(rows, "2026-09-24").map((item) => [item.bondCode, item]));
+  assert.equal(results.get("269959")?.previousCode, "269958");
+  assert.equal(results.get("269959")?.movement, "走阔");
+  assert.equal(results.get("269959")?.firstLine, "低269942估值(1.1498)14.53BP");
+  assert.equal(results.get("269959")?.secondLine, "今日新发贴现国债28D,利差走阔(老券269958新发时一二级利差为-8.84)");
+  assert.equal(results.get("269960")?.previousCode, "269947");
+  assert.equal(results.get("269960")?.firstLine, "低269958估值(1.18)2.15BP");
+  assert.equal(results.get("269960")?.secondLine, "今日新发贴现国债91D,利差走阔(老券269947新发时一二级利差为-2.13)");
+});
+
+test("贴现国债有边际利率时优先用于一二级利差，无边际时回退加权利率", () => {
   const plans: ParsedBondRecord[] = [
-    { tradeDate: "2026-09-24", bondCode: "269950", shortName: "26贴现国债50", issuer: "中华人民共和国财政部", bondType: "国债", tenor: "182D", amount: 40, bidTime: "10:00", issuanceRoute: "中债招标" },
-    { tradeDate: "2026-09-24", bondCode: "260405X8", shortName: "26农发05", issuer: "中国农业发展银行", bondType: "农发债", tenor: "5", amount: 80, bidTime: "14:00", issuanceRoute: "中债招标" },
+    { tradeDate: "2026-09-24", bondCode: "269959", issuer: "中华人民共和国财政部", bondType: "国债", tenor: "28D", raw: { 加权利率: "0.9131%", 边际利率: "1.0045%" } },
+    { tradeDate: "2026-09-24", bondCode: "2600006X2", shortName: "26超长特别国债06(续发2)", issuer: "中华人民共和国财政部", bondType: "国债", tenor: "30Y", raw: { 加权利率: "2.1464%", 边际利率: "-%" } },
+  ];
+  const drafts = createTreasuryCommentDrafts(plans, []);
+  assert.equal(drafts.find((draft) => draft.bondCode === "269959")?.finalValue, "1.0045");
+  assert.equal(drafts.find((draft) => draft.bondCode === "2600006X2")?.finalValue, "2.1464");
+});
+
+test("续发超长特别国债继续按上次同券利差判断", () => {
+  const previous: ParsedBondRecord = {
+    tradeDate: "2026-09-10", bondCode: "2600006", shortName: "26超长特别国债06", issuer: "中华人民共和国财政部", bondType: "国债", tenor: "30Y",
+    summaryMeta: meta({ baseCode: "2600006", auctionSpreadText: "-0.06(较二级(2.14))" }),
+  };
+  const next: ParsedBondRecord = {
+    tradeDate: "2026-09-24", bondCode: "2600006X2", shortName: "26超长特别国债06(续发2)", issuer: "中华人民共和国财政部", bondType: "国债", tenor: "30Y",
+    summaryMeta: meta({ baseCode: "2600006", auctionSpreadText: "+0.74(较2600006二级(2.139))", winningRateText: "2.1464%", secondaryText: "2.139%" }),
+  };
+  const result = policyComments([previous, next], "2026-09-24")[0];
+  assert.equal(result.firstLine, "高2600006二级(2.139)0.74BP");
+  assert.equal(result.secondLine, "今日续发超长特别国债30Y,利差反转(上次-0.06(较二级(2.14)))");
+});
+
+test("下载当日已确认信息并在同场次内按期限排列", () => {
+  const plans: ParsedBondRecord[] = [
+    { tradeDate: "2026-09-24", bondCode: "260405X8", shortName: "26农发05", issuer: "中国农业发展银行", bondType: "农发债", tenor: "5", amount: 80, bidTime: "14:00", issuanceRoute: "中债招标", raw: { "全场倍数": "4.5倍" } },
+    { tradeDate: "2026-09-24", bondCode: "260401X3", shortName: "26农发01", issuer: "中国农业发展银行", bondType: "农发债", tenor: "1", amount: 60, bidTime: "14:00", issuanceRoute: "中债招标" },
+    { tradeDate: "2026-09-24", bondCode: "269950", shortName: "26贴现国债50", issuer: "中华人民共和国财政部", bondType: "国债", tenor: "182D", amount: 40, bidTime: "10:00", issuanceRoute: "中债招标", raw: { "边际利率": "1.0045%" } },
   ];
   const drafts = [
     ...createTreasuryCommentDrafts(plans, []),
-    ...createPolicyCommentDrafts(plans, []).map((draft) => ({ ...draft, benchmarkValue: "1.55", finalValue: "1.53" })),
+    ...createPolicyCommentDrafts(plans, []).map((draft) => ({ ...draft, benchmarkValue: draft.bondCode === "260401X3" ? "1.42" : "1.55", finalValue: draft.bondCode === "260401X3" ? "1.40" : "1.53" })),
   ];
-  const bytes = buildUpdatedSpreadWorkbook(template, drafts, plans, "2026-09-24");
+  const bytes = buildDailySpreadInputWorkbook(drafts, plans, "2026-09-24");
   const output = XLSX.read(bytes, { type: "array", cellFormula: true });
-  assert.deepEqual(output.SheetNames, ["Sheet1", "国开调整"]);
-  assert.equal(output.Sheets.Sheet1.B2.v, "260410Z21");
-  assert.equal(output.Sheets.Sheet1.B3.v, "269950");
-  assert.equal(output.Sheets.Sheet1.E3?.v ?? "", "");
-  assert.equal(output.Sheets.Sheet1.B4.v, "260405X8");
-  assert.ok(Math.abs(Number(output.Sheets.Sheet1.E4.v) - 0.0153) < 1e-10);
-  assert.ok(Math.abs(Number(output.Sheets.Sheet1.U4.v) - 0.0155) < 1e-10);
-  assert.equal(output.Sheets.Sheet1.G4.v, -2);
-  assert.match(output.Sheets.Sheet1.X4.f || "", /E4-U4/);
-  assert.equal(output.Sheets.Sheet1.AA4.f, "IF(W4=\"\",\"\",W4)");
-  assert.equal(output.Sheets.Sheet1.AE4.v, "260405X8.IB");
-  assert.equal(output.Sheets.Sheet1["!ref"], "A1:AF4");
-  assert.equal(output.Sheets["国开调整"].A2.v, 123);
+  assert.deepEqual(output.SheetNames, ["今日待粘贴"]);
+  const sheet = output.Sheets["今日待粘贴"];
+  assert.equal(sheet.A1.v, "发行日期");
+  assert.equal(sheet.AF1.v, "久期");
+  assert.deepEqual([sheet.B2.v, sheet.B3.v, sheet.B4.v], ["260401X3", "260405X8", "269950"]);
+  assert.deepEqual([sheet.C2.v, sheet.C3.v, sheet.C4.v], [1, 5, "182D"]);
+  assert.equal(sheet.D3.v, 80);
+  assert.ok(Math.abs(Number(sheet.E3.v) - 0.0153) < 1e-10);
+  assert.ok(Math.abs(Number(sheet.U3.v) - 0.0155) < 1e-10);
+  assert.equal(sheet.G3.v, -2);
+  assert.equal(sheet.H3.v, 4.5);
+  assert.equal(sheet.P3.v, "中国农业发展银行");
+  assert.equal(sheet.X3.v, -2);
+  assert.equal(sheet.AE3.v, "260405X8.IB");
+  assert.equal(sheet.F3?.v ?? "", "");
+  assert.equal(sheet["!ref"], "A1:AF4");
 });

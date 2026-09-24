@@ -14,19 +14,22 @@ async function reportXml(spreadRecords: ParsedBondRecord[], localRecords: Parsed
   return (await JSZip.loadAsync(await blob.arrayBuffer())).file("word/document.xml")!.async("string");
 }
 
-test("four-day report shortens the title, schedule and daily reviews to the actual period", async () => {
+test("four-trading-day report keeps the full-week title and Friday schedule column", async () => {
   const xml = await reportXml([
     { tradeDate: "2026-08-31", bondCode: "A", tenor: "1Y", amount: 10, bondType: "国债" },
     { tradeDate: "2026-09-03", bondCode: "B", tenor: "3Y", amount: 20, bondType: "农发债" },
   ], [], [], [], "2026-09-03");
-  assert.match(xml, /利率债发行周报0831-0903/);
-  assert.doesNotMatch(xml, /9\/4 回顾|周五/);
+  assert.match(xml, /利率债发行周报0831-0904/);
+  assert.doesNotMatch(xml, /9\/4 回顾/);
+  assert.match(xml, /周五/);
   const document = new DOMParser().parseFromString(xml, "application/xml");
   const scheduleRows = Array.from(document.getElementsByTagName("w:tbl").item(1)!.getElementsByTagName("w:tr"));
   for (const index of [0, 1, 2, 3, 5, 7]) {
-    assert.equal(scheduleRows[index].getElementsByTagName("w:tc").length, 5);
+    assert.equal(scheduleRows[index].getElementsByTagName("w:tc").length, 6);
   }
   assert.equal(document.getElementsByTagName("w:tbl").length, 6);
+  const fridayValues = [1, 2, 3, 5, 7].map((index) => scheduleRows[index].getElementsByTagName("w:tc").item(5)?.textContent);
+  assert.deepEqual(fridayValues, ["-", "-", "-", "-", "-"]);
 });
 
 test("report deduplication recomputes issue counts, daily/weekly totals, net financing and prior-week change", async () => {
