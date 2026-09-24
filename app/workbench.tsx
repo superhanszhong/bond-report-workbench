@@ -209,15 +209,15 @@ function SpreadChart({ records, svgRef, startDate, endDate, metricLabel }: { rec
   const dateOffset = (date: string) => dates.length <= 1 ? 0 : (((dates.indexOf(date) / (dates.length - 1)) - 0.5) * categoryWidth * 0.52);
   const varietyOffset: Record<string, number> = { 国债: -13, 国开债: -4, 口行债: 4, 农发债: 13 };
   const y = (value: number) => chartTop + ((yMax - value) / (yMax - yMin)) * (chartBottom - chartTop);
-  const colors: Record<string, string> = { treasury: "#F4CDC3", cdb: "#FAE1CC", exim: "#E5E5E3", adbc: "#D6EFF5" };
-  const darkColors: Record<string, string> = { treasury: "#C18476", cdb: "#C99A76", exim: "#A6A6A2", adbc: "#8CBCC7" };
+  const colors: Record<string, string> = { treasury: "#E9B9AE", cdb: "#77A8D4", exim: "#D8D2C8", adbc: "#A9D7B8" };
+  const darkColors: Record<string, string> = { treasury: "#B56F61", cdb: "#3F739F", exim: "#8F887F", adbc: "#5E9B73" };
   const points = normalized.map(row => ({ ...row, cx: xCenter(row.key) + dateOffset(row.tradeDate) + (varietyOffset[row.bondType || ""] || 0), cy: y(Number(row.spread)) }));
   type Box = { x: number; y: number; w: number; h: number };
   const placed: Box[] = [];
   const overlaps = (a: Box, b: Box) => a.x < b.x + b.w + 6 && a.x + a.w + 6 > b.x && a.y < b.y + b.h + 6 && a.y + a.h + 6 > b.y;
   const callouts = [...points.filter(row => Number(row.spread) > 0).sort((a, b) => Number(b.spread) - Number(a.spread)), ...points.filter(row => Number(row.spread) <= -1).sort((a, b) => Number(a.spread) - Number(b.spread))].map((row, labelIndex) => {
-    const label = `${row.shortName || row.bondCode || ""}  ${Number(row.spread) > 0 ? "+" : ""}${Number(row.spread).toFixed(2)}bp`;
-    const w = Math.max(132, label.length * 9.7 + 34);
+    const label = `${row.bondCode || ""}  ${Number(row.spread) > 0 ? "+" : ""}${Number(row.spread).toFixed(2)}bp`;
+    const w = Math.max(112, label.length * 10.5 + 34);
     const h = 36;
     const candidates: { x: number; y: number }[] = [];
     const sideFirst = (row.sourceIndex + labelIndex) % 2 === 0;
@@ -268,6 +268,7 @@ function SpreadChart({ records, svgRef, startDate, endDate, metricLabel }: { rec
         {points.map((row, index) => {
           const notable = Number(row.spread) > 0 || Number(row.spread) <= -1;
           return <g key={`${row.bondCode}-${index}`}>
+            <title>{`${row.shortName || row.bondCode || ""} ${Number(row.spread) > 0 ? "+" : ""}${Number(row.spread).toFixed(2)}bp`}</title>
             <circle cx={row.cx} cy={row.cy} r={notable ? 9 : 6.5} fill={colors[tone(row.bondType || "")]} fillOpacity={notable ? 1 : .76} stroke={notable ? darkColors[tone(row.bondType || "")] : "#FFFFFF"} strokeWidth={notable ? 2.8 : 1.2} />
           </g>;
         })}
@@ -279,7 +280,7 @@ function SpreadChart({ records, svgRef, startDate, endDate, metricLabel }: { rec
         </g>)}
         <text x="860" y="950" textAnchor="middle" fontSize="21" fontWeight="600" fill="#626a73">发行期限</text>
         <text x="25" y="535" transform="rotate(-90 25 535)" textAnchor="middle" fontSize="21" fontWeight="600" fill="#626a73">{metricLabel}（bp）</text>
-        {[["国债","#F4CDC3"],["国开债","#FAE1CC"],["口行债","#E5E5E3"],["农发债","#D6EFF5"]].map(([label,color],i) => <g key={label} transform={`translate(${485+i*190},1005)`}><circle r="11" fill={color}/><text x="22" y="7" fontSize="24" fontWeight="700" fill="#555b63">{label}</text></g>)}
+        {issuerTypes.map((label,i) => <g key={label} transform={`translate(${485+i*190},1005)`}><circle r="11" fill={colors[tone(label)]}/><text x="22" y="7" fontSize="24" fontWeight="700" fill="#555b63">{label}</text></g>)}
       </svg>
       {!normalized.length && <div className="chart-empty">上传一二级表后，这里按所选区间生成利差图</div>}
     </div>
