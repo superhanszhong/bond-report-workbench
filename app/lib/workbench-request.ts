@@ -38,10 +38,35 @@ type LocalDraft = {
   updated_at: string;
 };
 
-type StoreName = "imports" | "records" | "drafts";
+type StoreName = "imports" | "records" | "drafts" | "source_files";
 const DATABASE_NAME = "bond-report-workbench";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const REPORT_SNAPSHOT_KEY = "__latest_report_snapshot__";
+const SPREAD_WORKBOOK_KEY = "latest_spread_workbook";
+
+export async function saveSpreadWorkbookTemplate(file: File) {
+  // Read the file before opening the IndexedDB transaction. IndexedDB may
+  // auto-close an idle transaction while a large workbook is being read.
+  const bytes = await file.arrayBuffer();
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction("source_files", "readwrite");
+    transaction.objectStore("source_files").put({
+      id: SPREAD_WORKBOOK_KEY,
+      fileName: file.name,
+      savedAt: new Date().toISOString(),
+      bytes,
+    });
+    await transactionDone(transaction);
+  } finally { database.close(); }
+}
+
+export async function loadSpreadWorkbookTemplate(): Promise<{ fileName: string; savedAt: string; bytes: ArrayBuffer } | null> {
+  const database = await openDatabase();
+  try {
+    return await requestResult(database.transaction("source_files", "readonly").objectStore("source_files").get(SPREAD_WORKBOOK_KEY)) || null;
+  } finally { database.close(); }
+}
 
 export async function loadReportSnapshot(): Promise<ReportSnapshot | null> {
   const database = await openDatabase();
@@ -88,6 +113,7 @@ function openDatabase() {
       if (!database.objectStoreNames.contains("imports")) database.createObjectStore("imports", { keyPath: "id" });
       if (!database.objectStoreNames.contains("records")) database.createObjectStore("records", { keyPath: "id" });
       if (!database.objectStoreNames.contains("drafts")) database.createObjectStore("drafts", { keyPath: "week_start" });
+      if (!database.objectStoreNames.contains("source_files")) database.createObjectStore("source_files", { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("无法打开浏览器历史库"));

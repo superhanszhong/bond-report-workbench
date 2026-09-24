@@ -6,13 +6,28 @@ import { DOMParser } from "@xmldom/xmldom";
 import { buildWeeklyReportBlob, mergeIssuanceSessions, reportDataWarnings, sortReportBonds } from "../app/lib/report.ts";
 import type { ParsedBondRecord } from "../app/lib/workbench.ts";
 
-async function reportXml(spreadRecords: ParsedBondRecord[], localRecords: ParsedBondRecord[] = [], previousSpreadRecords: ParsedBondRecord[] = [], ytdLocalRecords = localRecords) {
+async function reportXml(spreadRecords: ParsedBondRecord[], localRecords: ParsedBondRecord[] = [], previousSpreadRecords: ParsedBondRecord[] = [], ytdLocalRecords = localRecords, reportEndDate?: string) {
   const template = await readFile("public/templates/weekly-bond-report-template.docx");
-  const blob = await buildWeeklyReportBlob({ weekStart: "2026-08-31", summary: "", spreadRecords, localRecords, ytdLocalRecords, previousSpreadRecords,
+  const blob = await buildWeeklyReportBlob({ weekStart: "2026-08-31", reportEndDate, summary: "", spreadRecords, localRecords, ytdLocalRecords, previousSpreadRecords,
     templateBytes: template.buffer.slice(template.byteOffset, template.byteOffset + template.byteLength) as ArrayBuffer,
     maturity: { rateTotal: 4080, rateBreakdown: "农发:4080亿", localDaily: {}, localTotal: 0 } });
   return (await JSZip.loadAsync(await blob.arrayBuffer())).file("word/document.xml")!.async("string");
 }
+
+test("four-day report shortens the title, schedule and daily reviews to the actual period", async () => {
+  const xml = await reportXml([
+    { tradeDate: "2026-08-31", bondCode: "A", tenor: "1Y", amount: 10, bondType: "国债" },
+    { tradeDate: "2026-09-03", bondCode: "B", tenor: "3Y", amount: 20, bondType: "农发债" },
+  ], [], [], [], "2026-09-03");
+  assert.match(xml, /利率债发行周报0831-0903/);
+  assert.doesNotMatch(xml, /9\/4 回顾|周五/);
+  const document = new DOMParser().parseFromString(xml, "application/xml");
+  const scheduleRows = Array.from(document.getElementsByTagName("w:tbl").item(1)!.getElementsByTagName("w:tr"));
+  for (const index of [0, 1, 2, 3, 5, 7]) {
+    assert.equal(scheduleRows[index].getElementsByTagName("w:tc").length, 5);
+  }
+  assert.equal(document.getElementsByTagName("w:tbl").length, 6);
+});
 
 test("report deduplication recomputes issue counts, daily/weekly totals, net financing and prior-week change", async () => {
   const bond = { tradeDate: "2026-09-01", bondType: "农发债", bondCode: "09260411", tenor: "1.112", amount: 60 };

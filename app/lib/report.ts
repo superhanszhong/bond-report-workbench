@@ -8,6 +8,7 @@ import type { ReportTotals } from "./report-baseline.ts";
 
 type ReportInput = {
   weekStart: string;
+  reportEndDate?: string;
   summary: string;
   localRecords: ParsedBondRecord[];
   spreadRecords: ParsedBondRecord[];
@@ -102,6 +103,11 @@ function rewriteCell(cell: Element, value: unknown) {
 function rewriteRow(row: Element, values: unknown[]) {
   const cells = directElements(row, "tc");
   cells.forEach((cell, index) => rewriteCell(cell, values[index] ?? ""));
+}
+function rewriteSizedRow(row: Element, values: unknown[]) {
+  const cells = directElements(row, "tc");
+  for (let index = cells.length - 1; index >= values.length; index -= 1) row.removeChild(cells[index]);
+  rewriteRow(row, values);
 }
 function removeFixedRowHeight(row: Element) {
   const properties = directElements(row, "trPr")[0];
@@ -262,8 +268,9 @@ function dailyLead(rows: ParsedBondRecord[]) {
   });
   return `今日${pieces.join("，")}，招标结果如下：`;
 }
-function reportDates(weekStart: string) {
-  return Array.from({ length: 5 }, (_, index) => {
+function reportDates(weekStart: string, weekEnd: string) {
+  const length = Math.max(1, Math.min(5, Math.round((new Date(`${weekEnd}T12:00:00`).valueOf() - new Date(`${weekStart}T12:00:00`).valueOf()) / 86400000) + 1));
+  return Array.from({ length }, (_, index) => {
     const date = new Date(`${weekStart}T12:00:00`); date.setDate(date.getDate() + index);
     return date.toISOString().slice(0, 10);
   });
@@ -395,7 +402,7 @@ export function reportTotals(input: ReportInput): ReportTotals {
 }
 
 export async function buildWeeklyReportBlob({
-  weekStart, localRecords, spreadRecords, scheduleRecords = [], previousSpreadRecords = [], previousRateIssuance, ytdLocalRecords = localRecords, templateBytes, maturity,
+  weekStart, reportEndDate, localRecords, spreadRecords, scheduleRecords = [], previousSpreadRecords = [], previousRateIssuance, ytdLocalRecords = localRecords, templateBytes, maturity,
 }: ReportInput) {
   spreadRecords = consolidateBondRecords(spreadRecords);
   previousSpreadRecords = consolidateBondRecords(previousSpreadRecords);
@@ -417,8 +424,9 @@ export async function buildWeeklyReportBlob({
   const tables = directElements(body, "tbl");
   if (paragraphs.length < 31 || tables.length < 7) throw new Error("周报母版版式与预期不一致");
 
-  const weekEnd = fridayOf(weekStart);
-  const dates = reportDates(weekStart);
+  const scheduledWeekEnd = fridayOf(weekStart);
+  const weekEnd = reportEndDate && reportEndDate >= weekStart && reportEndDate <= scheduledWeekEnd ? reportEndDate : scheduledWeekEnd;
+  const dates = reportDates(weekStart, weekEnd);
   const currentAmount = amount(spreadRecords);
   for (const row of [...spreadRecords, ...localRecords, ...ytdLocalRecords]) {
     if (row.amount === null || row.amount === undefined || !Number.isFinite(row.amount) || row.amount < 0) throw new Error(`${row.tradeDate} ${row.bondCode} 发行量缺失或无效，请更新对应底稿`);
@@ -473,17 +481,18 @@ export async function buildWeeklyReportBlob({
   const plannedRate = mergeIssuanceSessions(spreadRecords, scheduleRecords);
   const dailyPlannedRate = dates.map((date) => plannedRate.filter((row) => row.tradeDate === date));
   const dailyLocal = dates.map((date) => localRecords.filter((row) => row.tradeDate === date));
-  rewriteRow(weeklyRows[1], ["上午", ...dailyPlannedRate.map((rows) => dailyPlan(rows, "上午"))]);
-  rewriteRow(weeklyRows[2], ["下午", ...dailyPlannedRate.map((rows) => dailyPlan(rows, "下午"))]);
-  rewriteRow(weeklyRows[3], [`国债政金债合计\n${text(amount(plannedRate))}亿`, ...dailyPlannedRate.map((rows) => text(amount(rows)))]);
+  rewriteSizedRow(weeklyRows[0], ["", ...dates.map(weekday)]);
+  rewriteSizedRow(weeklyRows[1], ["上午", ...dailyPlannedRate.map((rows) => dailyPlan(rows, "上午"))]);
+  rewriteSizedRow(weeklyRows[2], ["下午", ...dailyPlannedRate.map((rows) => dailyPlan(rows, "下午"))]);
+  rewriteSizedRow(weeklyRows[3], [`国债政金债合计\n${text(amount(plannedRate))}亿`, ...dailyPlannedRate.map((rows) => text(amount(rows)))]);
   rewriteRow(weeklyRows[4], ["本周合计", varietyTotals(plannedRate)]);
-  rewriteRow(weeklyRows[5], [`地方债\n${text(localTotal)}亿`, ...dailyLocal.map((rows) => rows.length ? text(amount(rows)) : "-")]);
+  rewriteSizedRow(weeklyRows[5], [`地方债\n${text(localTotal)}亿`, ...dailyLocal.map((rows) => rows.length ? text(amount(rows)) : "-")]);
   if (maturity) {
     rewriteRow(weeklyRows[6], [`国债政金债到期合计（含周末）\n${text(maturity.rateTotal)}亿`, maturity.rateBreakdown]);
-    rewriteRow(weeklyRows[7], [`地方债到期（不含周末）\n${text(localMaturityTotal)}亿`, ...dates.map((date) => maturity.localDaily[date] ? text(maturity.localDaily[date]) : "-")]);
+    rewriteSizedRow(weeklyRows[7], [`地方债到期（不含周末）\n${text(localMaturityTotal)}亿`, ...dates.map((date) => maturity.localDaily[date] ? text(maturity.localDaily[date]) : "-")]);
   } else if (!referenceWeek) {
     rewriteRow(weeklyRows[6], ["国债政金债到期合计（含周末）", "-"]);
-    rewriteRow(weeklyRows[7], ["地方债到期（不含周末）", "-", "-", "-", "-", "-"]);
+    rewriteSizedRow(weeklyRows[7], ["地方债到期（不含周末）", ...dates.map(() => "-")]);
   }
 
   const headingParagraphs = [8, 13, 18, 22, 26];
@@ -501,6 +510,11 @@ export async function buildWeeklyReportBlob({
     setParagraphFlag(paragraphs[leadParagraphs[index]], "keepNext");
     keepTableTogether(tables[index + 2]);
   });
+  for (let index = dates.length; index < 5; index += 1) {
+    body.removeChild(paragraphs[headingParagraphs[index]]);
+    body.removeChild(paragraphs[leadParagraphs[index]]);
+    body.removeChild(tables[index + 2]);
+  }
 
   zip.file("word/document.xml", new XMLSerializer().serializeToString(document), { createFolders: false });
   const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE", compressionOptions: { level: 6 } });

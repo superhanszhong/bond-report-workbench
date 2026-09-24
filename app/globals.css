@@ -364,3 +364,10 @@ button { color: inherit; }
 .manual-baseline-fields label { display: grid; gap: 8px; font-size: 14px; color: #334155; }
 .manual-baseline-fields input { width: 100%; box-sizing: border-box; min-height: 42px; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #172b40; font: inherit; }
 .manual-baseline-fields input:focus-visible { outline: 2px solid #356f92; outline-offset: 2px; }
+.comment-kind-tabs { display: inline-flex; gap: 4px; margin: 18px 0 2px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: #f6f4f2; }
+.comment-kind-tabs button { min-height: 36px; padding: 0 15px; border: 0; border-radius: 7px; background: transparent; color: #746d68; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.comment-kind-tabs button span { display: inline-grid; min-width: 20px; height: 20px; margin-left: 6px; place-items: center; border-radius: 10px; background: rgba(126,102,88,.09); font-size: 10px; }
+.comment-kind-tabs button.active { background: #fff; color: #8f5148; box-shadow: 0 2px 8px rgba(88,65,55,.09); }
+.comment-kind-tabs button.active span { background: #f7e6e1; }
+.comment-kind-tabs button:disabled { color: #b7b0ab; cursor: default; opacity: .68; }
+.comment-not-applicable { display: block; text-align: center; color: #aaa39e; }

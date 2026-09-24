@@ -27,6 +27,7 @@ export type PolicyCommentDraft = {
   issuer: string;
   bondType: string;
   tenor: string;
+  bidTime?: string;
   rateType: string;
   route: string;
   benchmarkType: string;
@@ -84,6 +85,7 @@ function displayBondCode(code = "") {
 
 function issuerLabel(row: ParsedBondRecord) {
   const source = `${row.bondType || ""}${row.issuer || ""}`;
+  if (/国债|财政部/.test(source)) return "国债";
   if (/农发|农业发展/.test(source)) return "农发";
   if (/口行|进出口/.test(source)) return "口行";
   if (/国开|国家开发/.test(source)) return "国开";
@@ -95,8 +97,21 @@ function tenorLabel(value = "") {
   return /[DMY]$/.test(clean) ? clean : `${clean}Y`;
 }
 
+function tenorYears(value = "") {
+  const clean = value.trim().toUpperCase();
+  const numeric = Number.parseFloat(clean);
+  if (!Number.isFinite(numeric)) return Number.POSITIVE_INFINITY;
+  if (/D$/.test(clean)) return numeric / 365;
+  if (/M$/.test(clean)) return numeric / 12;
+  return numeric;
+}
+
 function isPolicy(row: ParsedBondRecord) {
   return ["国开债", "口行债", "农发债"].includes(row.bondType || "") || /国家开发|进出口|农业发展/.test(row.issuer || "");
+}
+
+function isTreasury(row: ParsedBondRecord) {
+  return row.bondType === "国债" || /财政部/.test(row.issuer || "");
 }
 
 function isDr(row: ParsedBondRecord) {
@@ -174,6 +189,7 @@ function issueDescription(row: ParsedBondRecord) {
   const action = reopened ? "增发" : "新发";
   const issuer = issuerLabel(row);
   const maturity = tenorLabel(row.tenor || "");
+  if (isTreasury(row)) return `今日${action}${maturity}${/D$/i.test(maturity) ? "贴现国债" : "国债"}`;
   const rateType = selectedRateType(row);
   const route = row.summaryMeta?.route || row.issuanceRoute || "";
   const clearing = /^DR/.test(rateType) || /^09/.test(code) || /清发|上清所/.test(`${row.shortName || ""}${route}${row.remark || ""}`);
@@ -266,11 +282,11 @@ function drComment(row: ParsedBondRecord, records: ParsedBondRecord[]): PolicySh
 }
 
 export function policyCommentDates(records: ParsedBondRecord[]) {
-  return [...new Set(records.filter(isPolicy).map((row) => row.tradeDate))].sort().reverse();
+  return [...new Set(records.filter((row) => isPolicy(row) || isTreasury(row)).map((row) => row.tradeDate))].sort().reverse();
 }
 
 export function policyComments(records: ParsedBondRecord[], date: string) {
-  return records.filter((row) => row.tradeDate === date && isPolicy(row))
+  return records.filter((row) => row.tradeDate === date && (isPolicy(row) || isTreasury(row)))
     .map((row) => isDr(row) ? drComment(row, records) : ordinaryComment(row, records));
 }
 
@@ -335,9 +351,10 @@ function inputRate(value: unknown) {
   return parsed === null ? "" : compactNumber(parsed, 4);
 }
 
-export function createPolicyCommentDrafts(planRecords: ParsedBondRecord[], history: ParsedBondRecord[], existing: PolicyCommentDraft[] = []) {
+function createCommentDrafts(planRecords: ParsedBondRecord[], history: ParsedBondRecord[], existing: PolicyCommentDraft[] = []) {
   const existingById = new Map(existing.map((draft) => [recordKey(draft), draft]));
-  return planRecords.filter(isPolicy).map((row) => {
+  const sessionOrder = new Map<string, number>();
+  const drafts = planRecords.map((row) => {
     const id = recordKey(row);
     const previous = latestSameBond(row, history);
     const previousDraft = existingById.get(id);
@@ -354,6 +371,7 @@ export function createPolicyCommentDrafts(planRecords: ParsedBondRecord[], histo
       issuer: row.issuer || "",
       bondType: row.bondType || "",
       tenor: tenorLabel(row.tenor || ""),
+      bidTime: row.bidTime || "",
       rateType,
       route: row.issuanceRoute || "中债招标",
       benchmarkType: nextBenchmarkType,
@@ -363,6 +381,26 @@ export function createPolicyCommentDrafts(planRecords: ParsedBondRecord[], histo
       sequenceCheck: sequenceCheck(row, history),
     } satisfies PolicyCommentDraft;
   });
+  drafts.forEach((draft) => {
+    const session = `${draft.tradeDate}|${draft.issuer || draft.bondType}|${draft.route}|${draft.bidTime}`;
+    if (!sessionOrder.has(session)) sessionOrder.set(session, sessionOrder.size);
+  });
+  return drafts.sort((left, right) => {
+    const leftSession = `${left.tradeDate}|${left.issuer || left.bondType}|${left.route}|${left.bidTime}`;
+    const rightSession = `${right.tradeDate}|${right.issuer || right.bondType}|${right.route}|${right.bidTime}`;
+    return left.tradeDate.localeCompare(right.tradeDate)
+      || (sessionOrder.get(leftSession)! - sessionOrder.get(rightSession)!)
+      || tenorYears(left.tenor) - tenorYears(right.tenor)
+      || left.bondCode.localeCompare(right.bondCode);
+  });
+}
+
+export function createPolicyCommentDrafts(planRecords: ParsedBondRecord[], history: ParsedBondRecord[], existing: PolicyCommentDraft[] = []) {
+  return createCommentDrafts(planRecords.filter(isPolicy), history, existing);
+}
+
+export function createTreasuryCommentDrafts(planRecords: ParsedBondRecord[], history: ParsedBondRecord[], existing: PolicyCommentDraft[] = []) {
+  return createCommentDrafts(planRecords.filter(isTreasury), history, existing);
 }
 
 function draftRecord(draft: PolicyCommentDraft): ParsedBondRecord | null {
@@ -410,6 +448,40 @@ function draftRecord(draft: PolicyCommentDraft): ParsedBondRecord | null {
       proceeds: "",
     },
   };
+}
+
+// Build a safe partial primary-secondary record. Fields not supplied by the daily plan/input
+// remain empty and can be completed later by uploading the official primary-secondary workbook.
+export function policyDraftSpreadRecords(drafts: PolicyCommentDraft[], plans: ParsedBondRecord[]) {
+  const planByKey = new Map(plans.map((plan) => [recordKey(plan), plan]));
+  return drafts.map((draft) => {
+    const result = draftRecord(draft);
+    if (!result) return null;
+    const plan = planByKey.get(recordKey(draft));
+    const dr = isReopenedBondCode(draft.bondCode) && /^DR(?:001|007)?浮息债$/i.test(draft.rateType);
+    const ownSecondary = !draft.referenceBond?.trim() && draft.benchmarkType === "二级";
+    const display: Record<string, string> = {};
+    if (dr) display.中标净价 = draft.finalValue;
+    else display.中标利率 = draft.finalValue;
+    if (ownSecondary) display.二级 = dr ? `${draft.benchmarkValue}元` : draft.benchmarkValue;
+    else if (!draft.referenceBond?.trim() && /估值|估价/.test(draft.benchmarkType)) display.前一日估值 = draft.benchmarkValue;
+    const raw: Record<string, unknown> = {
+      ...(plan?.raw || {}),
+      ...(dr ? { 中标净价: Number(draft.finalValue) } : { 中标利率: Number(draft.finalValue) }),
+      ...(ownSecondary ? { 二级: Number(draft.benchmarkValue) } : {}),
+      __display: display,
+      __summaryMeta: result.summaryMeta,
+      __partialFromComment: true,
+    };
+    return {
+      ...plan,
+      ...result,
+      amount: plan?.amount,
+      bidTime: plan?.bidTime || draft.bidTime,
+      spread: null,
+      raw,
+    } satisfies ParsedBondRecord;
+  }).filter((row): row is ParsedBondRecord => Boolean(row));
 }
 
 export function policyDraftResults(drafts: PolicyCommentDraft[], history: ParsedBondRecord[]): PolicyDraftResult[] {
